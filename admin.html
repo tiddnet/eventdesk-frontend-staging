@@ -1,0 +1,1559 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<!-- ADR 0018 — see index.html for the full rationale/limitations note. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:; connect-src 'self' https://staging-api.eventdesk.click; object-src 'none'; base-uri 'none'; frame-ancestors 'none';" />
+<title>EventDesk — Admin</title>
+<link rel="stylesheet" href="style.css" />
+<!-- ADR 0032 — additive visual layer on top of style.css's existing token
+     system (same --bg/--ink/--navy/etc.). Everything here is new classes,
+     not overrides of anything admin.html uses — the two files can diverge
+     visually without either one touching the other's CSS. -->
+<style>
+  h1.page-title, .panel-head h2 {
+    font-family: "Arial Narrow", "Helvetica Neue Condensed", Arial, sans-serif;
+    font-weight: 800; text-transform: uppercase; letter-spacing: 0.015em;
+  }
+  h1.page-title { font-size: 24px; margin: 0 0 2px; }
+  .page-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 16px; flex-wrap: wrap; gap: 8px; }
+  .page-meta { color: var(--ink-faint); font-size: 12.5px; }
+
+
+  .stat-row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-bottom: 20px; }
+  .stat-tile {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 12px 14px; box-shadow: 0 1px 2px rgba(22,39,63,0.06);
+  }
+  .stat-tile .label { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-faint); font-weight: 700; margin-bottom: 6px; }
+  .stat-tile .value { font-variant-numeric: tabular-nums; font-size: 23px; font-weight: 700; line-height: 1; color: var(--ink); }
+  .stat-tile .delta { font-size: 11px; margin-top: 5px; color: var(--ink-soft); }
+  .stat-tile.attn { border-color: var(--accent-soft); }
+  .stat-tile.attn .value { color: var(--accent); }
+  @media (max-width: 820px) { .stat-row { grid-template-columns: repeat(2, 1fr); } }
+
+  .panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 1px 2px rgba(22,39,63,0.06); overflow: hidden; margin-bottom: 16px; }
+  .panel-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 15px; border-bottom: 1px solid var(--border); }
+  .panel-head h2 { font-size: 14px; margin: 0; }
+  .panel-head .count-pill { font-size: 11px; font-weight: 700; background: var(--accent-soft); color: var(--accent); border-radius: 20px; padding: 2px 9px; }
+  .panel-sub { padding: 2px 15px 9px; font-size: 11.5px; color: var(--ink-faint); border-bottom: 1px solid var(--border); }
+  .panel-body { padding: 4px 0; }
+  .panel-empty { padding: 14px 15px; font-size: 12.5px; color: var(--ink-faint); }
+
+  .change-row { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; padding: 10px 15px; border-bottom: 1px solid var(--border); }
+  .change-row:last-child { border-bottom: none; }
+  .change-avatar { width: 28px; height: 28px; border-radius: 50%; background: var(--surface-2); color: var(--ink-soft); display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; flex-shrink: 0; }
+  .change-text { min-width: 0; }
+  .change-text .who { font-weight: 600; font-size: 13px; }
+  .change-text .what { color: var(--ink-soft); font-size: 12px; margin-top: 1px; }
+  .change-text .what .field-tag { font-family: ui-monospace, monospace; font-size: 10px; background: var(--surface-2); border-radius: 3px; padding: 1px 5px; margin-right: 4px; color: var(--ink-soft); }
+  .change-actions { display: flex; gap: 6px; white-space: nowrap; }
+  .source-tag { font-size: 10.5px; color: var(--ink-faint); font-weight: 600; }
+
+  .awareness-row { padding: 10px 15px; border-bottom: 1px solid var(--border); font-size: 12.5px; }
+  .awareness-row:last-child { border-bottom: none; }
+  .ack-pill { display: inline-block; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-faint); border: 1px solid var(--border); border-radius: 20px; padding: 1px 8px; margin-left: 6px; }
+
+  table.roster { width: 100%; }
+  table.roster tr:hover td { background: var(--surface-2); }
+  .code { font-family: ui-monospace, monospace; font-size: 12px; color: var(--ink-soft); }
+  .dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; margin-right: 5px; }
+  .dot.ok { background: var(--success); }
+  .dot.wait { background: var(--warning); }
+  .dot.none { background: var(--border); }
+  .note-flag { color: var(--ink-faint); cursor: help; }
+
+  .subevent-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; }
+  .subevent-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 1px 2px rgba(22,39,63,0.06); padding: 14px; }
+  .subevent-card .mode-badge { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; border-radius: 20px; padding: 2px 9px; display: inline-block; margin-bottom: 8px; }
+  .mode-badge.on { background: var(--success-soft); color: var(--success); }
+  .mode-badge.off { background: var(--surface-2); color: var(--ink-soft); }
+  .subevent-card h3 { font-size: 14.5px; margin: 0 0 4px; }
+  .subevent-card .when { font-size: 12px; color: var(--ink-faint); margin-bottom: 10px; }
+  .subevent-card .stat-line { display: flex; justify-content: space-between; font-size: 12px; color: var(--ink-soft); padding-top: 8px; border-top: 1px solid var(--border); margin-top: 4px; }
+  .subevent-card .stat-line strong { color: var(--ink); font-variant-numeric: tabular-nums; }
+  .subevent-card .card-actions { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+  .subevent-card .card-actions .btn { flex: 1; font-size: 11.5px; padding: 6px 8px; }
+
+  /* Nav badges — always-on attention counts on the left nav itself,
+     visible on every page since the sidebar is. Hidden entirely at zero
+     (toggled via JS display:none) rather than showing "0". */
+  .nav-badge {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 17px; height: 17px; padding: 0 5px; margin-left: 4px;
+    font-family: var(--font-mono, ui-monospace, monospace); font-size: 10.5px; font-weight: 700;
+    color: #fff; background: var(--accent); border-radius: 999px; line-height: 1;
+  }
+</style>
+</head>
+<body>
+<div class="shell wide">
+  <h1>Admin dashboard</h1>
+  <div id="notice"></div>
+
+  <div class="admin-shell">
+    <nav class="admin-nav">
+      <button class="nav-link" data-page="events">Events</button>
+      <button class="nav-link" data-page="overview">Overview</button>
+      <button class="nav-link" data-page="attendees">Attendees <span class="nav-badge" id="attendees-nav-badge" style="display:none;"></span></button>
+      <button class="nav-link" data-page="subevents">Sub-events</button>
+      <button class="nav-link" data-page="hotel">Hotel</button>
+      <button class="nav-link" data-page="event-settings">Event settings</button>
+      <hr class="nav-divider" />
+      <button class="nav-link" data-page="organization">Organization</button>
+    </nav>
+
+    <main class="admin-main">
+      <p class="hint" id="active-event-banner" style="margin: 0 0 16px;"></p>
+
+      <!-- ============================== Events ============================== -->
+      <div class="page" id="page-events">
+        <div class="card" id="zero-events-notice" style="display:none;">
+          <h2>Create your first event to get started</h2>
+          <p class="hint">Everything else — roster, hotel export, sub-events — is scoped to an event. Create one below.</p>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head"><h2>Events</h2></div>
+          <table class="roster" style="margin-bottom: 0;">
+            <thead><tr><th>Name</th><th>Dates</th><th>Registration</th><th></th></tr></thead>
+            <tbody id="upcoming-events-body"></tbody>
+          </table>
+          <details id="past-events-details" style="display:none; padding: 0 15px 12px;">
+            <summary class="hint" style="cursor:pointer;">Past events</summary>
+            <table class="roster" style="margin-top: 10px;">
+              <thead><tr><th>Name</th><th>Dates</th><th>Registration</th><th></th></tr></thead>
+              <tbody id="past-events-body"></tbody>
+            </table>
+          </details>
+          <div style="padding: 12px 15px;"><button class="btn ghost" id="new-event-toggle">+ New event</button></div>
+        </div>
+
+        <div class="card" id="new-event-card" style="display:none;">
+          <h2>Create event</h2>
+          <div class="field-row">
+            <div class="field"><label>Name</label><input id="ev-name" placeholder="Annual Dealer Summit 2028" /></div>
+            <div class="field"><label>Master billing name</label><input id="ev-billing-name" placeholder="M&amp;K Truck Centers" /></div>
+          </div>
+          <div class="field-row">
+            <div class="field"><label>Start date</label><input id="ev-start" type="date" /></div>
+            <div class="field"><label>End date</label><input id="ev-end" type="date" /></div>
+          </div>
+          <button class="btn" id="create-event-btn">Create</button>
+          <button class="btn ghost" id="cancel-new-event">Cancel</button>
+        </div>
+      </div>
+
+      <!-- ============================== Overview ============================== -->
+      <div class="page" id="page-overview" style="display:none;">
+        <div class="stat-row" id="overview-stat-row">
+          <div class="stat-tile attn" id="stat-pending"><div class="label">Pending Approval</div><div class="value">—</div><div class="delta"></div></div>
+          <div class="stat-tile" id="stat-activity"><div class="label">Recent Activity</div><div class="value">—</div><div class="delta">last fetch</div></div>
+          <div class="stat-tile" id="stat-total"><div class="label">Total Attendees</div><div class="value">—</div><div class="delta"></div></div>
+          <div class="stat-tile" id="stat-dietary"><div class="label">Dietary On File</div><div class="value">—</div><div class="delta">via activity log</div></div>
+          <div class="stat-tile" id="stat-subevents"><div class="label">Sub-events Published</div><div class="value">—</div><div class="delta"></div></div>
+        </div>
+
+        <div class="card-row" id="overview-changes-row">
+          <div class="panel" style="margin-bottom:0;">
+            <div class="panel-head"><h2>Dietary &amp; meal changes</h2></div>
+            <table class="roster">
+              <thead><tr><th>Attendee</th><th>Change</th><th>By</th><th>When</th></tr></thead>
+              <tbody id="overview-dietary-body"></tbody>
+            </table>
+          </div>
+          <div class="panel flight-feature" id="overview-flight-card" style="margin-bottom:0;">
+            <div class="panel-head"><h2>Flight info updates</h2></div>
+            <table class="roster">
+              <thead><tr><th>Attendee</th><th>Change</th><th>By</th><th>When</th></tr></thead>
+              <tbody id="overview-flight-body"></tbody>
+            </table>
+          </div>
+        </div>
+        <div style="height:16px;"></div>
+
+        <div class="card-row">
+          <div class="panel" style="margin-bottom:0;">
+            <div class="panel-head"><h2>Admin invites — not yet claimed</h2></div>
+            <div class="panel-sub">Company-wide, not just this event.</div>
+            <table class="roster">
+              <thead><tr><th>Email</th><th>Invited</th><th></th></tr></thead>
+              <tbody id="overview-unclaimed-admins-body"></tbody>
+            </table>
+          </div>
+          <div class="card">
+            <h2>Event notes</h2>
+            <p class="hint">Internal only — general notes about this event, not any one attendee.</p>
+            <div id="event-notes-list" style="margin-bottom: 10px;"></div>
+            <div class="field-row">
+              <div class="field" style="grid-column: 1 / -1;"><input id="new-event-note" placeholder="e.g. Hotel contact is Jane, contract signed 3/1" /></div>
+            </div>
+            <button class="btn ghost" id="add-event-note">Add note</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ============================== Attendees ============================== -->
+      <div class="page" id="page-attendees" style="display:none;">
+        <div class="card">
+          <h2 id="attendee-form-heading">Attendee roster</h2>
+          <div class="field-row" style="margin-bottom: 12px;">
+            <div class="field"><label>First name</label><input id="new-first" /></div>
+            <div class="field"><label>Last name</label><input id="new-last" /></div>
+            <div class="field"><label>Email</label><input id="new-email" /></div>
+            <div class="field">
+              <label>Affiliation</label>
+              <select id="new-affiliation"><option value="internal">Internal</option><option value="external">External</option></select>
+            </div>
+          </div>
+          <div class="field-row" style="margin-bottom: 12px;">
+            <div class="field"><label>Company (if not billed to master)</label><input id="new-company" /></div>
+            <div class="field">
+              <label style="font-size: 12.5px; margin-top: 18px;"><input type="checkbox" id="new-billed-master" checked /> Billed to master account</label>
+            </div>
+          </div>
+          <label style="font-size: 12.5px;"><input type="checkbox" id="new-vip" /> VIP</label>
+          <button class="btn" id="add-attendee" style="margin-left: 12px;">Add attendee</button>
+          <button class="btn ghost" id="cancel-edit-attendee" style="display:none;">Cancel edit</button>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head"><h2>Roster</h2><span class="count-pill" id="roster-count-pill">0</span></div>
+          <table class="roster" style="margin-top: 0;">
+            <thead><tr><th>Name</th><th>Affiliation</th><th>Source</th><th>Billing</th><th class="flight-feature">Flight</th><th>Note</th><th></th></tr></thead>
+            <tbody id="roster-body"></tbody>
+          </table>
+        </div>
+
+        <div class="card">
+          <h2>Bulk import</h2>
+          <p class="hint">CSV columns: First Name, Last Name, Email. No invite emails are sent — imported attendees can get their own link from the event's sign-in page, or you can resend individually from the roster above.</p>
+          <input type="file" id="attendee-import-file" accept=".csv" />
+          <button class="btn" id="attendee-import-btn">Upload</button>
+          <div id="attendee-import-results" style="margin-top: 14px;"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head"><h2>Needs sign-off</h2><span class="count-pill" id="changes-count-pill">0</span></div>
+          <div class="panel-sub">Guest-submitted changes only — anything you enter directly applies immediately.</div>
+          <div class="panel-body" id="changes-body"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head"><h2>Recent activity</h2></div>
+          <div class="panel-sub">Full history — changes that already took effect, every field type.</div>
+          <table class="roster">
+            <thead><tr><th>Attendee</th><th>Field</th><th>Change</th><th>By</th><th>When</th></tr></thead>
+            <tbody id="activity-feed-body"></tbody>
+          </table>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head"><h2>Hotel requests — awaiting booking</h2><span class="count-pill" id="requests-count-pill">0</span></div>
+          <div class="panel-sub">Guests with no room booked yet submitted these dates directly — nothing's confirmed until you book and enter it below.</div>
+          <div class="panel-body" id="requests-body"></div>
+        </div>
+      </div>
+
+      <!-- ============================== Sub-events ============================== -->
+      <div class="page" id="page-subevents" style="display:none;">
+        <div class="card">
+          <h2>Create sub-event</h2>
+          <div class="field-row" style="margin-bottom: 12px;">
+            <div class="field"><label>Name</label><input id="se-name" /></div>
+            <div class="field"><label>Location</label><input id="se-location" /></div>
+            <div class="field"><label>Starts</label><input id="se-starts" type="datetime-local" /></div>
+            <div class="field"><label>Ends</label><input id="se-ends" type="datetime-local" /></div>
+          </div>
+          <label style="font-size: 12.5px;"><input type="checkbox" id="se-auto-enroll" /> Auto-enroll new attendees</label>
+          <button class="btn" id="add-subevent" style="margin-left: 12px;">Create sub-event</button>
+        </div>
+
+        <div class="page-head" style="margin: 20px 0 12px;"><h1 class="page-title" style="font-size:17px;">Sub-events</h1></div>
+        <div class="subevent-grid" id="subevents-grid"></div>
+      </div>
+
+      <!-- ============================== Hotel ============================== -->
+      <div class="page" id="page-hotel" style="display:none;">
+        <div class="card-row">
+          <div class="panel" style="margin-bottom:0;">
+            <div class="panel-head"><h2>Hotel export</h2></div>
+            <div class="panel-sub" style="border-bottom:none; padding-top:10px;">Column headers — edit to match the hotel's template.</div>
+            <div style="padding: 4px 15px 15px; display:flex; flex-direction:column; gap:8px;">
+              <div class="field"><label for="lbl-company">Company</label><input id="lbl-company" value="Company" /></div>
+              <div class="field"><label for="lbl-firstname">First Name</label><input id="lbl-firstname" value="First Name" /></div>
+              <div class="field"><label for="lbl-lastname">Last Name</label><input id="lbl-lastname" value="Last Name" /></div>
+              <div class="field"><label for="lbl-checkin">Check-in</label><input id="lbl-checkin" value="Check-in" /></div>
+              <div class="field"><label for="lbl-checkout">Check-out</label><input id="lbl-checkout" value="Check-out" /></div>
+              <div><button class="btn ghost" id="save-labels">Save labels</button> <button class="btn" id="export-csv">Export CSV</button></div>
+            </div>
+          </div>
+
+          <div class="panel" style="margin-bottom:0;">
+            <div class="panel-head"><h2>Hotel import</h2></div>
+            <div class="panel-sub" style="border-bottom:none; padding-top:10px;">Upload the hotel's confirmation roster (Name, Check-in, Check-out, Confirmation Number).</div>
+            <div style="padding: 4px 15px 15px;">
+              <input type="file" id="import-file" accept=".csv" />
+              <button class="btn" id="import-btn">Upload &amp; match</button>
+              <div id="import-results" style="margin-top: 14px;"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ============================== Event settings ============================== -->
+      <div class="page" id="page-event-settings" style="display:none;">
+        <div class="card">
+          <h2>Event details</h2>
+          <p class="hint">Name, dates, and billing name — fixable after the fact, whether it's a real change or a typo when the event was first created.</p>
+          <div class="field-row">
+            <div class="field"><label for="edit-ev-name">Name</label><input id="edit-ev-name" /></div>
+            <div class="field"><label for="edit-ev-billing-name">Master billing name</label><input id="edit-ev-billing-name" /></div>
+          </div>
+          <div class="field-row">
+            <div class="field"><label for="edit-ev-start">Start date</label><input id="edit-ev-start" type="date" /></div>
+            <div class="field"><label for="edit-ev-end">End date</label><input id="edit-ev-end" type="date" /></div>
+          </div>
+          <button class="btn ghost" id="save-event-details">Save changes</button>
+        </div>
+
+        <div class="card">
+          <h2>Registration</h2>
+          <label style="font-size: 12.5px;">
+            <input type="checkbox" id="allow-self-registration" /> Allow public self-registration for this event
+          </label>
+          <button class="btn ghost" id="save-registration-setting" style="margin-left: 12px; padding: 4px 10px; font-size: 12px;">Save</button>
+          <p class="hint" style="margin: 10px 0 0;">
+            Public registration link: <code id="registration-link"></code>
+            <button class="btn ghost" id="copy-registration-link" style="padding: 2px 8px; font-size: 11px;">Copy</button>
+          </p>
+        </div>
+      </div>
+
+      <!-- ============================== Organization ============================== -->
+      <div class="page" id="page-organization" style="display:none;">
+        <div class="card">
+          <h2>Branding</h2>
+          <p class="hint">Applies to every guest-facing page across all your events.</p>
+          <div class="field-row">
+            <div class="field"><label for="brand-display-name">Display name</label><input id="brand-display-name" placeholder="Defaults to event name" /></div>
+            <div class="field"><label for="brand-logo-url">Logo URL</label><input id="brand-logo-url" placeholder="https://…" /></div>
+          </div>
+          <div class="field-row">
+            <div class="field"><label for="brand-primary-color">Primary color</label><input id="brand-primary-color" type="color" /></div>
+            <div class="field"><label for="brand-accent-color">Accent color</label><input id="brand-accent-color" type="color" /></div>
+          </div>
+          <button class="btn ghost" id="save-branding">Save branding</button>
+        </div>
+
+        <div class="card">
+          <h2>Approval routing</h2>
+          <p class="hint">When on, a guest's change waits in "Needs sign-off" instead of applying immediately. Applies across all your events.</p>
+          <label style="font-size: 12.5px; display:block; margin-bottom: 6px;">
+            <input type="checkbox" id="approval-dietary" /> Dietary changes require approval
+          </label>
+          <label class="flight-feature" style="font-size: 12.5px; display:block; margin-bottom: 10px;">
+            <input type="checkbox" id="approval-flight" /> Flight changes require approval
+          </label>
+        </div>
+
+        <!-- ADR 0033 -->
+        <div class="card">
+          <h2>Feature settings</h2>
+          <label style="font-size: 12.5px; display:block; margin-bottom: 10px;">
+            <input type="checkbox" id="flight-tracking-enabled" /> Enable flight information tracking
+          </label>
+          <p class="hint" style="margin-top: -4px;">When off, flight fields are hidden from your team's dashboard and from guests' own registration page. No flight data is deleted — turning this back on restores everything.</p>
+          <div class="field-row" style="margin-top: 10px;">
+            <div class="field">
+              <label for="magic-link-ttl">Magic-link expiry (minutes)</label>
+              <input id="magic-link-ttl" type="number" min="0" step="1" style="max-width: 120px;" />
+            </div>
+          </div>
+          <p class="hint" style="margin-top: -4px;">0 = links never expire. A magic link that never expires can't be individually revoked if it leaks — only turn this on if you understand that tradeoff.</p>
+          <button class="btn ghost" id="save-feature-settings">Save</button>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head"><h2>Admins</h2></div>
+          <table class="roster" style="margin-bottom: 0;">
+            <thead><tr><th>Email</th><th>Role</th><th>Last signed in</th><th></th></tr></thead>
+            <tbody id="admins-body"></tbody>
+          </table>
+          <div class="field-row" style="padding: 12px 15px 0;">
+            <div class="field"><label for="invite-email">Email</label><input id="invite-email" type="email" /></div>
+            <div class="field">
+              <label for="invite-role">Role</label>
+              <select id="invite-role"><option value="admin">Admin</option><option value="editor">Editor</option></select>
+            </div>
+          </div>
+          <div style="padding: 10px 15px 15px;"><button class="btn ghost" id="invite-admin-btn">Invite</button></div>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<script src="config.js"></script>
+<script>
+  const session = localStorage.getItem("eventdesk_session");
+  if (!session || localStorage.getItem("eventdesk_role") !== "admin") {
+    window.location.href = "index.html";
+  }
+
+  const notice = document.getElementById("notice");
+  function showNotice(text, kind) {
+    notice.innerHTML = `<div class="notice ${kind}">${text}</div>`;
+  }
+
+  function escapeHtml(s) {
+    return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+  }
+
+  function initials(first, last) {
+    return `${(first || "?")[0] ?? "?"}${(last || "")[0] ?? ""}`.toUpperCase();
+  }
+
+  async function api(path, options = {}) {
+    const res = await fetch(`${API_BASE_URL}/admin${path}`, {
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${session}`,
+        ...(options.headers || {}),
+      },
+    });
+    if (res.status === 401) {
+      localStorage.clear();
+      window.location.href = "index.html";
+      throw new Error("session expired");
+    }
+    return res;
+  }
+
+  let activeEventId = localStorage.getItem("eventdesk_active_event") || "";
+  let allEvents = [];
+
+  function eventId() {
+    return activeEventId;
+  }
+
+  // Nav badges — always-on attention count, visible on every page since
+  // the sidebar is. Combines pending-changes + hotel-requests since both
+  // currently live on the Attendees page; no polling — called on
+  // navigation and after the specific actions that change these counts,
+  // matching this app's existing no-polling-anywhere convention.
+  async function refreshNavBadges() {
+    const badge = document.getElementById("attendees-nav-badge");
+    if (!eventId()) {
+      badge.style.display = "none";
+      return;
+    }
+    const [changesRes, requestsRes] = await Promise.all([
+      api(`/events/${eventId()}/changes/pending`),
+      api(`/events/${eventId()}/hotel-requests`),
+    ]);
+    const changes = await changesRes.json();
+    const requests = await requestsRes.json();
+    const total = changes.length + requests.length;
+    badge.textContent = total;
+    badge.style.display = total > 0 ? "" : "none";
+  }
+
+  function renderActiveEventBanner() {
+    const banner = document.getElementById("active-event-banner");
+    const ev = allEvents.find((e) => e.id === activeEventId);
+    if (!ev) {
+      banner.innerHTML = `<span class="hint">No event selected.</span>`;
+      return;
+    }
+    banner.innerHTML = `Event: <strong>${escapeHtml(ev.name)}</strong> <span class="hint" style="display:inline;">(${escapeHtml(ev.startDate)} – ${escapeHtml(ev.endDate)})</span> · <button class="btn ghost" id="switch-event-btn" style="padding:2px 8px; font-size:11px;">Switch</button>`;
+    document.getElementById("switch-event-btn").addEventListener("click", () => showPage("events"));
+  }
+
+  function setActiveEvent(id) {
+    activeEventId = id;
+    localStorage.setItem("eventdesk_active_event", id);
+    renderEventsPage();
+    renderActiveEventBanner();
+    loadPageData(currentPage);
+    refreshNavBadges();
+  }
+
+  async function loadEventList() {
+    const res = await api("/events");
+    allEvents = await res.json();
+    renderEventsPage();
+    renderActiveEventBanner();
+    return allEvents;
+  }
+
+  function renderEventsPage() {
+    const today = new Date().toISOString().slice(0, 10);
+    const upcoming = allEvents.filter((e) => e.endDate >= today).sort((a, b) => a.startDate.localeCompare(b.startDate));
+    const past = allEvents.filter((e) => e.endDate < today).sort((a, b) => b.endDate.localeCompare(a.endDate));
+
+    const row = (e) => `
+      <tr>
+        <td>${escapeHtml(e.name)} ${e.id === activeEventId ? '<span class="badge">active</span>' : ""}</td>
+        <td>${escapeHtml(e.startDate)} – ${escapeHtml(e.endDate)}</td>
+        <td><button class="btn ghost copy-reg-link-btn" data-url="${escapeHtml(registrationUrlFor(e.id))}" style="padding:4px 8px; font-size:11px;">Copy link</button></td>
+        <td><button class="btn ghost select-event-btn" data-id="${escapeHtml(e.id)}" style="padding:4px 8px; font-size:11px;">${e.id === activeEventId ? "Selected" : "Select"}</button></td>
+      </tr>`;
+
+    document.getElementById("upcoming-events-body").innerHTML = upcoming.length
+      ? upcoming.map(row).join("")
+      : `<tr><td colspan="4" class="hint">No upcoming events.</td></tr>`;
+    document.getElementById("past-events-body").innerHTML = past.map(row).join("");
+    document.getElementById("past-events-details").style.display = past.length ? "" : "none";
+
+    document.querySelectorAll(".copy-reg-link-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        navigator.clipboard.writeText(btn.dataset.url);
+        showNotice("Registration link copied.", "success");
+      });
+    });
+
+    document.querySelectorAll(".select-event-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        setActiveEvent(btn.dataset.id);
+        showPage("overview");
+      });
+    });
+  }
+
+  document.getElementById("new-event-toggle").addEventListener("click", () => {
+    document.getElementById("new-event-card").style.display = "";
+  });
+  document.getElementById("cancel-new-event").addEventListener("click", () => {
+    document.getElementById("new-event-card").style.display = "none";
+  });
+
+  document.getElementById("create-event-btn").addEventListener("click", async () => {
+    const name = document.getElementById("ev-name").value.trim();
+    const masterBillingName = document.getElementById("ev-billing-name").value.trim();
+    const startDate = document.getElementById("ev-start").value;
+    const endDate = document.getElementById("ev-end").value;
+
+    if (!name || !masterBillingName || !startDate || !endDate) {
+      return showNotice("Name, master billing name, start date, and end date are all required.", "error");
+    }
+    if (startDate > endDate) {
+      return showNotice("Start date must be on or before the end date.", "error");
+    }
+
+    const res = await api("/events", {
+      method: "POST",
+      body: JSON.stringify({ name, masterBillingName, startDate, endDate }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      showNotice(`Event "${escapeHtml(name)}" created.`, "success");
+      document.getElementById("new-event-card").style.display = "none";
+      document.getElementById("zero-events-notice").style.display = "none";
+      await loadEventList();
+      setActiveEvent(data.id);
+      showPage("overview");
+    } else {
+      const err = await res.json();
+      showNotice(err.error ?? "Could not create event.", "error");
+    }
+  });
+
+  async function loadEventNotes() {
+    const res = await api(`/events/${eventId()}/notes`);
+    const notes = await res.json();
+    document.getElementById("event-notes-list").innerHTML = notes.length
+      ? notes
+          .map(
+            (n) => `<p class="hint" style="margin:0 0 6px;"><strong style="color:var(--ink);">${new Date(n.createdAt).toLocaleDateString()}</strong> — ${escapeHtml(n.note)} <span style="color:var(--ink-faint);">(${escapeHtml(n.createdByEmail)})</span></p>`,
+          )
+          .join("")
+      : `<p class="hint" style="margin:0;">No notes yet.</p>`;
+  }
+
+  document.getElementById("add-event-note").addEventListener("click", async () => {
+    const note = document.getElementById("new-event-note").value.trim();
+    if (!note) return;
+    const res = await api(`/events/${eventId()}/notes`, {
+      method: "POST",
+      body: JSON.stringify({ note }),
+    });
+    if (res.ok) {
+      document.getElementById("new-event-note").value = "";
+      loadEventNotes();
+    }
+  });
+
+  let pendingChangesCache = [];
+
+  async function loadChanges() {
+    const res = await api(`/events/${eventId()}/changes/pending`);
+    const rows = await res.json();
+    pendingChangesCache = rows;
+    document.getElementById("changes-count-pill").textContent = rows.length;
+    document.getElementById("changes-body").innerHTML = rows.length === 0
+      ? `<div class="panel-empty">Nothing waiting for review.</div>`
+      : rows
+      .map((r) => {
+        const newVal = JSON.parse(r.newValue);
+        const summary = Object.entries(newVal)
+          .map(([k, v]) => `${escapeHtml(k)}: ${escapeHtml(v) || "—"}`)
+          .join(", ");
+        return `
+      <div class="change-row" ${r.isVip ? 'style="background:var(--warning-soft);"' : ""}>
+        <div class="change-avatar" ${r.isVip ? 'style="background:var(--warning); color:#fff;"' : ""}>${initials(r.firstName, r.lastName)}</div>
+        <div class="change-text">
+          <div class="who">${escapeHtml(r.firstName)} ${escapeHtml(r.lastName)} ${r.isVip ? '<span class="badge vip">VIP</span>' : ""}</div>
+          <div class="what"><span class="field-tag">${escapeHtml(r.fieldType)}</span>${summary}</div>
+        </div>
+        <div class="change-actions">
+          <button class="btn ghost reject-change-btn" data-id="${escapeHtml(r.id)}">Reject</button>
+          <button class="btn approve-change-btn" data-id="${escapeHtml(r.id)}">Approve</button>
+        </div>
+      </div>`;
+      })
+      .join("");
+
+    document.querySelectorAll(".approve-change-btn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const res = await api(`/changes/${btn.dataset.id}/approve`, { method: "POST" });
+        if (res.ok) {
+          showNotice("Approved.", "success");
+          loadChanges();
+          computeOverviewStats();
+          refreshNavBadges();
+        }
+      });
+    });
+    document.querySelectorAll(".reject-change-btn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const res = await api(`/changes/${btn.dataset.id}/reject`, { method: "POST" });
+        if (res.ok) {
+          showNotice("Rejected.", "success");
+          loadChanges();
+          computeOverviewStats();
+          refreshNavBadges();
+        }
+      });
+    });
+  }
+
+  function renderActivityRows(targetId, rows) {
+    document.getElementById(targetId).innerHTML = rows.length === 0
+      ? `<tr><td colspan="${targetId === "activity-feed-body" ? 5 : 4}" class="hint">Nothing yet.</td></tr>`
+      : rows
+      .map((r) => {
+        const val = JSON.parse(r.newValue);
+        const summary = Object.entries(val)
+          .map(([k, v]) => `${escapeHtml(k)}: ${escapeHtml(v) || "—"}`)
+          .join(", ");
+        const byLabel = r.changedByRole === "admin" ? "Admin" : r.status === "approved" ? "Guest (approved)" : "Guest";
+        const fieldCell = targetId === "activity-feed-body" ? `<td>${escapeHtml(r.fieldType)}</td>` : "";
+        return `
+      <tr>
+        <td>${escapeHtml(r.firstName)} ${escapeHtml(r.lastName)} ${r.isVip ? '<span class="badge vip">VIP</span>' : ""}</td>
+        ${fieldCell}
+        <td>${summary}</td>
+        <td>${byLabel}</td>
+        <td>${new Date(r.createdAt).toLocaleString()}</td>
+      </tr>`;
+      })
+      .join("");
+  }
+
+  let activityFeedCache = [];
+
+  async function loadActivityFeed() {
+    const res = await api(`/events/${eventId()}/activity-feed`);
+    const rows = await res.json();
+    activityFeedCache = rows;
+    renderActivityRows("activity-feed-body", rows);
+  }
+
+  async function loadOverviewActivity() {
+    const res = await api(`/events/${eventId()}/activity-feed`);
+    const rows = await res.json();
+    activityFeedCache = rows;
+    renderActivityRows("overview-dietary-body", rows.filter((r) => r.fieldType === "dietary_preference"));
+    renderActivityRows("overview-flight-body", rows.filter((r) => r.fieldType === "flight_info"));
+  }
+
+  async function loadRequests() {
+    const res = await api(`/events/${eventId()}/hotel-requests`);
+    const rows = await res.json();
+    document.getElementById("requests-count-pill").textContent = rows.length;
+    document.getElementById("requests-body").innerHTML = rows.length === 0
+      ? `<div class="panel-empty">No open hotel requests.</div>`
+      : rows
+      .map(
+        (r) => `
+      <div class="change-row" ${r.isVip ? 'style="background:var(--warning-soft);"' : ""}>
+        <div class="change-avatar" ${r.isVip ? 'style="background:var(--warning); color:#fff;"' : ""}>${initials(r.firstName, r.lastName)}</div>
+        <div class="change-text">
+          <div class="who">${escapeHtml(r.firstName)} ${escapeHtml(r.lastName)} ${r.isVip ? '<span class="badge vip">VIP</span>' : ""}</div>
+          <div class="what">Requested ${escapeHtml(r.requestedCheckIn)} → ${escapeHtml(r.requestedCheckOut)} ${r.note ? `<span class="source-tag">· "${escapeHtml(r.note)}"</span>` : ""}</div>
+        </div>
+        <div class="change-actions">
+          <button class="btn ghost dismiss-request-btn" data-request="${escapeHtml(r.requestId)}" style="color:var(--ink-faint);">Dismiss</button>
+          <button class="btn book-btn" data-attendee="${escapeHtml(r.attendeeId)}" data-in="${escapeHtml(r.requestedCheckIn)}" data-out="${escapeHtml(r.requestedCheckOut)}">Book room</button>
+        </div>
+      </div>`,
+      )
+      .join("");
+
+    document.querySelectorAll(".book-btn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const roomNumber = prompt("Room number?") ?? "";
+        const res = await api(`/attendees/${btn.dataset.attendee}/hotel-assignment`, {
+          method: "POST",
+          body: JSON.stringify({
+            checkInDate: btn.dataset.in,
+            checkOutDate: btn.dataset.out,
+            roomNumber,
+          }),
+        });
+        if (res.ok) {
+          showNotice("Room booked.", "success");
+          loadRequests();
+          loadRoster();
+          refreshNavBadges();
+        }
+      });
+    });
+
+    document.querySelectorAll(".dismiss-request-btn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        if (!confirm("Dismiss this request without booking a room?")) return;
+        const res = await api(`/hotel-requests/${btn.dataset.request}/dismiss`, { method: "POST" });
+        if (res.ok) {
+          showNotice("Request dismissed.", "success");
+          loadRequests();
+          refreshNavBadges();
+        }
+      });
+    });
+  }
+
+  let rosterCache = [];
+  let editingAttendeeId = null;
+
+  async function loadRoster() {
+    const res = await api(`/events/${eventId()}/attendees`);
+    rosterCache = await res.json();
+    document.getElementById("roster-count-pill").textContent = rosterCache.length;
+    document.getElementById("roster-body").innerHTML = rosterCache.length === 0
+      ? `<tr><td colspan="7" class="hint">No attendees yet — add one above.</td></tr>`
+      : rosterCache
+      .map(
+        (a) => `
+      <tr ${a.isVip ? 'style="background:var(--warning-soft);"' : ""}>
+        <td>${escapeHtml(a.firstName)} ${escapeHtml(a.lastName)} ${a.isVip ? '<span class="badge vip">VIP</span>' : ""}</td>
+        <td><span class="badge">${escapeHtml(a.affiliation)}</span></td>
+        <td>${a.registrationSource === "self_registered" ? '<span class="dot ok"></span>self-registered' : '<span class="dot none"></span>admin-added'}</td>
+        <td>${a.billedToMaster ? "Master account" : escapeHtml(a.companyName ?? "Own company")}</td>
+        <td class="flight-feature"><button class="btn ghost flight-btn" data-attendee="${escapeHtml(a.id)}" style="padding:4px 8px; font-size:11px;">✈ Set</button></td>
+        <td class="note-flag" ${a.hasPrivateNote ? 'title="Admin note on file"' : ""}>${a.hasPrivateNote ? "●" : ""}</td>
+        <td>
+          <button class="btn ghost edit-btn" data-attendee="${escapeHtml(a.id)}" style="padding:4px 8px; font-size:11px;">Edit</button>
+          <button class="btn ghost notes-btn" data-attendee="${escapeHtml(a.id)}" style="padding:4px 8px; font-size:11px;">Notes</button>
+          <button class="btn ghost resend-invite-btn" data-attendee="${escapeHtml(a.id)}" style="padding:4px 8px; font-size:11px;">Invite link</button>
+          <button class="btn ghost remove-btn" data-attendee="${escapeHtml(a.id)}" data-name="${escapeHtml(a.firstName)} ${escapeHtml(a.lastName)}" style="padding:4px 8px; font-size:11px; color:var(--accent);">Remove</button>
+        </td>
+      </tr>`,
+      )
+      .join("");
+    applyFlightVisibility(); // ADR 0033 — roster-body cells above are regenerated each call
+
+    document.querySelectorAll(".notes-btn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const attendeeId = btn.dataset.attendee;
+        const res = await api(`/attendees/${attendeeId}/notes`);
+        const notes = await res.json();
+
+        if (notes.length === 0) {
+          const note = prompt("Private note (never visible to the guest):");
+          if (!note?.trim()) return;
+          await api(`/attendees/${attendeeId}/notes`, { method: "POST", body: JSON.stringify({ note: note.trim() }) });
+          showNotice("Note added.", "success");
+          loadRoster();
+          return;
+        }
+
+        const listing = notes.map((n, i) => `${i + 1}. ${n.note}`).join("\n");
+        const choice = prompt(
+          `${listing}\n\nEnter a number to edit, "d<number>" to delete (e.g. d1), or new text to add a note:`,
+        );
+        if (!choice?.trim()) return;
+        const trimmed = choice.trim();
+
+        const deleteMatch = trimmed.match(/^d(\d+)$/i);
+        if (deleteMatch) {
+          const target = notes[parseInt(deleteMatch[1], 10) - 1];
+          if (!target) return showNotice("No such note.", "error");
+          if (!confirm("Delete this note? This can't be undone.")) return;
+          await api(`/attendees/${attendeeId}/notes/${target.id}`, { method: "DELETE" });
+          showNotice("Note deleted.", "success");
+          loadRoster();
+          return;
+        }
+
+        if (/^\d+$/.test(trimmed)) {
+          const target = notes[parseInt(trimmed, 10) - 1];
+          if (!target) return showNotice("No such note.", "error");
+          const updated = prompt("Edit note:", target.note);
+          if (updated === null || !updated.trim()) return;
+          await api(`/attendees/${attendeeId}/notes/${target.id}`, {
+            method: "PATCH",
+            body: JSON.stringify({ note: updated.trim() }),
+          });
+          showNotice("Note updated.", "success");
+          loadRoster();
+          return;
+        }
+
+        await api(`/attendees/${attendeeId}/notes`, { method: "POST", body: JSON.stringify({ note: trimmed }) });
+        showNotice("Note added.", "success");
+        loadRoster();
+      });
+    });
+
+    document.querySelectorAll(".remove-btn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        if (!confirm(`Remove ${btn.dataset.name}? This deletes all their data (dietary, hotel, flight, notes) and can't be undone.`)) return;
+        const res = await api(`/attendees/${btn.dataset.attendee}`, { method: "DELETE" });
+        if (res.ok) {
+          showNotice("Attendee removed.", "success");
+          loadRoster();
+        } else {
+          const err = await res.json();
+          showNotice(err.error ?? "Could not remove attendee.", "error");
+        }
+      });
+    });
+
+    document.querySelectorAll(".resend-invite-btn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const res = await api(`/attendees/${btn.dataset.attendee}/resend-invite`, { method: "POST" });
+        const data = await res.json();
+        if (res.ok) {
+          showNotice(
+            data.devLink
+              ? `Dev mode — no email sent: <a href="${escapeHtml(data.devLink)}">sign-in link</a>.`
+              : data.emailDelivered === false
+                ? "Created, but the invite email couldn't be sent — try the resend button again."
+                : "Sign-in link resent.",
+            data.emailDelivered === false ? "error" : "success",
+          );
+        } else {
+          showNotice(data.error ?? "Could not resend invite.", "error");
+        }
+      });
+    });
+
+    document.querySelectorAll(".flight-btn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const arrivalFlight = prompt("Arrival flight (e.g. AA 1042, Jan 19, 3:00p):") ?? "";
+        const departureFlight = prompt("Departure flight:") ?? "";
+        const res = await api(`/attendees/${btn.dataset.attendee}/flight`, {
+          method: "POST",
+          body: JSON.stringify({ arrivalFlight, departureFlight }),
+        });
+        if (res.ok) showNotice("Flight saved — this attendee's flight is now admin-managed.", "success");
+      });
+    });
+
+    document.querySelectorAll(".edit-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const a = rosterCache.find((x) => x.id === btn.dataset.attendee);
+        if (!a) return;
+        editingAttendeeId = a.id;
+        document.getElementById("new-first").value = a.firstName;
+        document.getElementById("new-last").value = a.lastName;
+        document.getElementById("new-email").value = a.email;
+        document.getElementById("new-affiliation").value = a.affiliation;
+        document.getElementById("new-vip").checked = a.isVip;
+        document.getElementById("new-billed-master").checked = a.billedToMaster;
+        document.getElementById("new-company").value = a.companyName ?? "";
+        document.getElementById("attendee-form-heading").textContent = `Editing ${a.firstName} ${a.lastName}`;
+        document.getElementById("add-attendee").textContent = "Save changes";
+        document.getElementById("cancel-edit-attendee").style.display = "";
+        window.scrollTo({ top: document.getElementById("attendee-form-heading").offsetTop - 20, behavior: "smooth" });
+      });
+    });
+  }
+
+  function resetAttendeeForm() {
+    editingAttendeeId = null;
+    document.getElementById("new-first").value = "";
+    document.getElementById("new-last").value = "";
+    document.getElementById("new-email").value = "";
+    document.getElementById("new-affiliation").value = "internal";
+    document.getElementById("new-vip").checked = false;
+    document.getElementById("new-billed-master").checked = true;
+    document.getElementById("new-company").value = "";
+    document.getElementById("attendee-form-heading").textContent = "Attendee roster";
+    document.getElementById("add-attendee").textContent = "Add attendee";
+    document.getElementById("cancel-edit-attendee").style.display = "none";
+  }
+
+  document.getElementById("cancel-edit-attendee").addEventListener("click", resetAttendeeForm);
+
+  document.getElementById("attendee-import-btn").addEventListener("click", async () => {
+    const fileInput = document.getElementById("attendee-import-file");
+    const file = fileInput.files[0];
+    if (!file) return showNotice("Choose a CSV file first.", "error");
+
+    const text = await file.text();
+    const res = await api(`/events/${eventId()}/attendees/import`, {
+      method: "POST",
+      headers: { "Content-Type": "text/csv" },
+      body: text,
+    });
+    if (!res.ok) return showNotice("Import failed.", "error");
+    const data = await res.json();
+
+    document.getElementById("attendee-import-results").innerHTML = `
+      <p class="hint" style="margin:0 0 8px;">${data.created.length} added, ${data.skipped.length} skipped.</p>
+      ${
+        data.skipped.length
+          ? `<table class="roster">
+              <thead><tr><th>Row</th><th>Reason</th></tr></thead>
+              <tbody>
+                ${data.skipped
+                  .map((s) => `<tr><td>${escapeHtml(s.row.join(", "))}</td><td>${escapeHtml(s.reason)}</td></tr>`)
+                  .join("")}
+              </tbody>
+            </table>`
+          : ""
+      }
+    `;
+    showNotice(`${data.created.length} attendee(s) added.`, "success");
+    fileInput.value = "";
+    loadRoster();
+  });
+
+  // ADR 0033 — populated by loadBranding, read by applyFlightVisibility.
+  let orgSettings = { flightTrackingEnabled: true, magicLinkTtlMinutes: 15 };
+
+  function applyFlightVisibility() {
+    document.querySelectorAll(".flight-feature").forEach((el) => {
+      el.style.display = orgSettings.flightTrackingEnabled ? "" : "none";
+    });
+    // ADR 0033 follow-up — hiding overview-flight-card via display:none
+    // still reserves its column in the 2-col grid (.card-row), leaving a
+    // visible gap next to Dietary & meal changes. Collapse that specific
+    // row to one column instead of just hiding the panel inside it.
+    document.getElementById("overview-changes-row").style.gridTemplateColumns =
+      orgSettings.flightTrackingEnabled ? "" : "1fr";
+  }
+
+  async function loadBranding() {
+    const res = await api("/organization");
+    if (!res.ok) return;
+    const org = await res.json();
+    const b = org.branding ?? {};
+    document.getElementById("brand-display-name").value = b.displayName ?? "";
+    document.getElementById("brand-logo-url").value = b.logoUrl ?? "";
+    document.getElementById("brand-primary-color").value = b.primaryColor ?? "#1b3a63";
+    document.getElementById("brand-accent-color").value = b.accentColor ?? "#a93226";
+
+    orgSettings = {
+      flightTrackingEnabled: org.flightTrackingEnabled ?? true,
+      magicLinkTtlMinutes: org.magicLinkTtlMinutes ?? 15,
+    };
+    document.getElementById("flight-tracking-enabled").checked = orgSettings.flightTrackingEnabled;
+    document.getElementById("magic-link-ttl").value = orgSettings.magicLinkTtlMinutes;
+    applyFlightVisibility();
+  }
+
+  document.getElementById("save-feature-settings").addEventListener("click", async () => {
+    const flightTrackingEnabled = document.getElementById("flight-tracking-enabled").checked;
+    const magicLinkTtlMinutesRaw = document.getElementById("magic-link-ttl").value;
+    const magicLinkTtlMinutes = parseInt(magicLinkTtlMinutesRaw, 10);
+
+    if (!Number.isInteger(magicLinkTtlMinutes) || magicLinkTtlMinutes < 0) {
+      return showNotice("Magic-link expiry must be 0 or a positive whole number of minutes.", "error");
+    }
+    if (
+      magicLinkTtlMinutes === 0 &&
+      !confirm(
+        "Setting magic-link expiry to 0 means links never expire and can't be revoked individually if one leaks — the only recovery is rotating a shared secret that would also sign out every other admin/guest across the platform. Continue?",
+      )
+    ) {
+      return;
+    }
+
+    const res = await api("/organization/settings", {
+      method: "PATCH",
+      body: JSON.stringify({ flightTrackingEnabled, magicLinkTtlMinutes }),
+    });
+    if (res.ok) {
+      showNotice("Feature settings saved.", "success");
+      orgSettings = { flightTrackingEnabled, magicLinkTtlMinutes };
+      applyFlightVisibility();
+    } else {
+      const err = await res.json();
+      showNotice(err.error ?? "Could not save feature settings.", "error");
+    }
+  });
+
+  document.getElementById("save-branding").addEventListener("click", async () => {
+    const res = await api("/organization/branding", {
+      method: "PATCH",
+      body: JSON.stringify({
+        displayName: document.getElementById("brand-display-name").value || null,
+        logoUrl: document.getElementById("brand-logo-url").value || null,
+        primaryColor: document.getElementById("brand-primary-color").value || null,
+        accentColor: document.getElementById("brand-accent-color").value || null,
+      }),
+    });
+    if (res.ok) {
+      showNotice("Branding saved.", "success");
+    } else {
+      const err = await res.json();
+      showNotice(err.error ?? "Could not save branding.", "error");
+    }
+  });
+
+  async function loadApprovalConfig() {
+    const res = await api("/field-approval-config");
+    if (!res.ok) return;
+    const rows = await res.json();
+    for (const row of rows) {
+      const el = document.getElementById(row.fieldType === "dietary_preference" ? "approval-dietary" : "approval-flight");
+      if (el) el.checked = row.requiresApproval;
+    }
+  }
+
+  function wireApprovalToggle(elId, fieldType) {
+    document.getElementById(elId).addEventListener("change", async (e) => {
+      const res = await api("/field-approval-config", {
+        method: "PATCH",
+        body: JSON.stringify({ fieldType, requiresApproval: e.target.checked }),
+      });
+      if (res.ok) {
+        showNotice("Approval routing saved.", "success");
+      } else {
+        const err = await res.json();
+        showNotice(err.error ?? "Could not save.", "error");
+        e.target.checked = !e.target.checked;
+      }
+    });
+  }
+  wireApprovalToggle("approval-dietary", "dietary_preference");
+  wireApprovalToggle("approval-flight", "flight_info");
+
+  function wireAdminInviteActions(scope) {
+    document.querySelectorAll(`${scope} .resend-admin-btn`).forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const res = await api(`/admins/${btn.dataset.id}/resend-link`, { method: "POST" });
+        const data = await res.json();
+        if (res.ok) {
+          showNotice(
+            data.devLink
+              ? `Dev mode — no email sent: <a href="${escapeHtml(data.devLink)}">sign-in link</a>.`
+              : data.emailDelivered === false
+                ? "Couldn't send the invite email — try again."
+                : "Invite link resent.",
+            data.emailDelivered === false ? "error" : "success",
+          );
+        } else {
+          showNotice(data.error ?? "Could not resend invite.", "error");
+        }
+      });
+    });
+    document.querySelectorAll(`${scope} .rescind-admin-btn`).forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        if (!confirm(`${btn.textContent.trim()} ${btn.dataset.email}'s admin access? This can't be undone.`)) return;
+        const res = await api(`/admins/${btn.dataset.id}`, { method: "DELETE" });
+        if (res.ok) {
+          showNotice("Done.", "success");
+          loadAdmins();
+          loadOverviewUnclaimedAdmins();
+        } else {
+          const err = await res.json();
+          showNotice(err.error ?? "Could not update admin access.", "error");
+        }
+      });
+    });
+  }
+
+  async function loadAdmins() {
+    const res = await api("/admins");
+    if (!res.ok) return;
+    const rows = await res.json();
+    document.getElementById("admins-body").innerHTML = rows.length === 0
+      ? `<tr><td colspan="4" class="hint">No admins listed.</td></tr>`
+      : rows
+      .map((a) => {
+        const claimed = !!a.lastSignInAt;
+        return `<tr>
+          <td>${escapeHtml(a.email)}</td>
+          <td><span class="badge">${escapeHtml(a.role)}</span></td>
+          <td>${claimed ? `<span class="dot ok"></span>${new Date(a.lastSignInAt).toLocaleDateString()}` : '<span class="dot wait"></span>Not yet claimed'}</td>
+          <td>
+            ${!claimed ? `<button class="btn ghost resend-admin-btn" data-id="${escapeHtml(a.id)}" style="padding:4px 8px; font-size:11px;">Resend</button>` : ""}
+            <button class="btn ghost rescind-admin-btn" data-id="${escapeHtml(a.id)}" data-email="${escapeHtml(a.email)}" style="padding:4px 8px; font-size:11px; color:var(--accent);">${claimed ? "Revoke" : "Rescind"}</button>
+          </td>
+        </tr>`;
+      })
+      .join("");
+
+    wireAdminInviteActions("#admins-body");
+  }
+
+  async function loadOverviewUnclaimedAdmins() {
+    const res = await api("/admins");
+    if (!res.ok) return;
+    const rows = (await res.json()).filter((a) => !a.lastSignInAt);
+    document.getElementById("overview-unclaimed-admins-body").innerHTML = rows.length === 0
+      ? `<tr><td colspan="3" class="hint">Everyone invited has signed in.</td></tr>`
+      : rows
+      .map(
+        (a) => `<tr>
+          <td>${escapeHtml(a.email)}</td>
+          <td>${new Date(a.createdAt).toLocaleDateString()}</td>
+          <td>
+            <button class="btn ghost resend-admin-btn" data-id="${escapeHtml(a.id)}" style="padding:4px 8px; font-size:11px;">Resend</button>
+            <button class="btn ghost rescind-admin-btn" data-id="${escapeHtml(a.id)}" data-email="${escapeHtml(a.email)}" style="padding:4px 8px; font-size:11px; color:var(--accent);">Rescind</button>
+          </td>
+        </tr>`,
+      )
+      .join("");
+
+    wireAdminInviteActions("#overview-unclaimed-admins-body");
+  }
+
+  document.getElementById("invite-admin-btn").addEventListener("click", async () => {
+    const email = document.getElementById("invite-email").value.trim();
+    const role = document.getElementById("invite-role").value;
+    if (!email) return showNotice("Enter an email address.", "error");
+
+    const res = await api("/invite-admin", { method: "POST", body: JSON.stringify({ email, role }) });
+    if (res.ok) {
+      const data = await res.json();
+      showNotice(
+        data.devLink
+          ? `Invited. Dev mode — no email sent: <a href="${data.devLink}">sign-in link</a>.`
+          : data.emailDelivered === false
+            ? "Invited, but the invite email couldn't be sent — they can request a sign-in link themselves from the sign-in page."
+            : "Invite sent.",
+        data.emailDelivered === false ? "error" : "success",
+      );
+      document.getElementById("invite-email").value = "";
+      loadAdmins();
+    } else {
+      const err = await res.json();
+      showNotice(err.error ?? "Could not send invite.", "error");
+    }
+  });
+
+  async function loadEventDetails() {
+    const res = await api("/events");
+    const events = await res.json();
+    const event = events.find((e) => e.id === eventId());
+    if (!event) return;
+    document.getElementById("edit-ev-name").value = event.name;
+    document.getElementById("edit-ev-billing-name").value = event.masterBillingName;
+    document.getElementById("edit-ev-start").value = event.startDate;
+    document.getElementById("edit-ev-end").value = event.endDate;
+  }
+
+  document.getElementById("save-event-details").addEventListener("click", async () => {
+    const name = document.getElementById("edit-ev-name").value.trim();
+    const masterBillingName = document.getElementById("edit-ev-billing-name").value.trim();
+    const startDate = document.getElementById("edit-ev-start").value;
+    const endDate = document.getElementById("edit-ev-end").value;
+
+    if (!name || !masterBillingName || !startDate || !endDate) {
+      return showNotice("Name, master billing name, start date, and end date are all required.", "error");
+    }
+    if (startDate > endDate) {
+      return showNotice("Start date must be on or before the end date.", "error");
+    }
+
+    const res = await api(`/events/${eventId()}`, {
+      method: "PATCH",
+      body: JSON.stringify({ name, masterBillingName, startDate, endDate }),
+    });
+    if (res.ok) {
+      showNotice("Event details saved.", "success");
+      await loadEventList();
+    } else {
+      const err = await res.json();
+      showNotice(err.error ?? "Could not save event details.", "error");
+    }
+  });
+
+  function registrationUrlFor(id) {
+    return `${window.location.origin}${window.location.pathname.replace("admin.html", "")}index.html?event=${id}`;
+  }
+
+  async function loadRegistrationSettings() {
+    const res = await fetch(`${API_BASE_URL}/events/${eventId()}/public`);
+    if (!res.ok) return;
+    const event = await res.json();
+    document.getElementById("allow-self-registration").checked = event.allowSelfRegistration;
+    document.getElementById("registration-link").textContent = registrationUrlFor(eventId());
+  }
+
+  document.getElementById("save-registration-setting").addEventListener("click", async () => {
+    const res = await api(`/events/${eventId()}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        allowSelfRegistration: document.getElementById("allow-self-registration").checked,
+      }),
+    });
+    if (res.ok) showNotice("Registration setting saved.", "success");
+  });
+
+  document.getElementById("copy-registration-link").addEventListener("click", () => {
+    navigator.clipboard.writeText(document.getElementById("registration-link").textContent);
+    showNotice("Link copied.", "success");
+  });
+
+  document.getElementById("add-attendee").addEventListener("click", async () => {
+    const fields = {
+      firstName: document.getElementById("new-first").value,
+      lastName: document.getElementById("new-last").value,
+      email: document.getElementById("new-email").value,
+      affiliation: document.getElementById("new-affiliation").value,
+      isVip: document.getElementById("new-vip").checked,
+      billedToMaster: document.getElementById("new-billed-master").checked,
+      companyName: document.getElementById("new-company").value,
+    };
+
+    if (editingAttendeeId) {
+      const res = await api(`/attendees/${editingAttendeeId}`, {
+        method: "PATCH",
+        body: JSON.stringify(fields),
+      });
+      if (res.ok) {
+        showNotice("Attendee updated.", "success");
+        resetAttendeeForm();
+        loadRoster();
+      } else {
+        const err = await res.json();
+        showNotice(err.error ?? "Could not update attendee.", "error");
+      }
+      return;
+    }
+
+    const res = await api(`/events/${eventId()}/attendees`, {
+      method: "POST",
+      body: JSON.stringify(fields),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      showNotice(
+        data.devLink
+          ? `Attendee added. Dev mode — no email sent: <a href="${data.devLink}">sign-in link</a>.`
+          : data.emailDelivered === false
+            ? "Attendee added, but the invite email couldn't be sent — use the invite-link button in the roster to try again."
+            : "Attendee added — invite sent.",
+        data.emailDelivered === false ? "error" : "success",
+      );
+      resetAttendeeForm();
+      loadRoster();
+    } else {
+      const err = await res.json();
+      showNotice(err.error ?? "Could not add attendee.", "error");
+    }
+  });
+
+  let subEventsCache = [];
+
+  async function loadSubEvents() {
+    const res = await api(`/events/${eventId()}/sub-events`);
+    subEventsCache = await res.json();
+    document.getElementById("subevents-grid").innerHTML = subEventsCache.length === 0
+      ? `<p class="hint">No sub-events yet — create one above.</p>`
+      : subEventsCache
+      .map(
+        (se) => `
+      <div class="subevent-card">
+        <span class="mode-badge ${se.autoEnrollNewAttendees ? "on" : "off"}">Auto-enroll: ${se.autoEnrollNewAttendees ? "on" : "off"}</span>
+        <h3>${escapeHtml(se.name)}</h3>
+        <div class="when">${new Date(se.startsAt).toLocaleString()}${se.location ? " · " + escapeHtml(se.location) : ""}</div>
+        <div class="stat-line">Attendees<strong>${se.attendeeCount}</strong></div>
+        <div class="stat-line">PDF<strong style="${se.publishedPdfUrl ? "" : "color:var(--accent);"}">${se.publishedPdfUrl ? "Published" : "Not published"}</strong></div>
+        <div class="card-actions">
+          ${!se.autoEnrollNewAttendees ? `<button class="btn ghost enroll-all-btn" data-id="${escapeHtml(se.id)}">Enroll all</button>` : ""}
+          <button class="btn ghost publish-btn" data-id="${escapeHtml(se.id)}">${se.publishedPdfUrl ? "Re-publish" : "Publish PDF"}</button>
+          ${se.publishedPdfUrl ? `<button class="btn ghost view-pdf-btn" data-id="${escapeHtml(se.id)}">View PDF</button>` : ""}
+          <button class="btn ghost delete-subevent-btn" data-id="${escapeHtml(se.id)}" data-name="${escapeHtml(se.name)}" style="color:var(--accent);">Delete</button>
+        </div>
+      </div>`,
+      )
+      .join("");
+
+    document.querySelectorAll(".enroll-all-btn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const res = await api(`/sub-events/${btn.dataset.id}/enroll-all`, { method: "POST" });
+        if (res.ok) {
+          showNotice("Everyone enrolled.", "success");
+          loadSubEvents();
+        }
+      });
+    });
+    document.querySelectorAll(".view-pdf-btn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const res = await api(`/sub-events/${btn.dataset.id}/pdf`);
+        if (!res.ok) return showNotice("Could not load the PDF.", "error");
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        window.open(url, "_blank");
+      });
+    });
+    document.querySelectorAll(".delete-subevent-btn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        if (!confirm(`Delete "${btn.dataset.name}"? This removes everyone's signup for it and can't be undone.`)) return;
+        const res = await api(`/sub-events/${btn.dataset.id}`, { method: "DELETE" });
+        if (res.ok) {
+          showNotice("Sub-event deleted.", "success");
+          loadSubEvents();
+        }
+      });
+    });
+    document.querySelectorAll(".publish-btn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const res = await api(`/sub-events/${btn.dataset.id}/publish-pdf`, { method: "POST" });
+        if (res.ok) {
+          showNotice("PDF published.", "success");
+          loadSubEvents();
+        } else {
+          const err = await res.json();
+          showNotice(err.error ?? "Could not publish PDF.", "error");
+        }
+      });
+    });
+  }
+
+  document.getElementById("add-subevent").addEventListener("click", async () => {
+    const res = await api(`/events/${eventId()}/sub-events`, {
+      method: "POST",
+      body: JSON.stringify({
+        name: document.getElementById("se-name").value,
+        location: document.getElementById("se-location").value,
+        startsAt: new Date(document.getElementById("se-starts").value).toISOString(),
+        endsAt: new Date(document.getElementById("se-ends").value).toISOString(),
+        autoEnrollNewAttendees: document.getElementById("se-auto-enroll").checked,
+      }),
+    });
+    if (res.ok) {
+      showNotice("Sub-event created.", "success");
+      loadSubEvents();
+    }
+  });
+
+  const HOTEL_LABEL_FIELDS = [
+    ["company", "lbl-company", "Company"],
+    ["firstName", "lbl-firstname", "First Name"],
+    ["lastName", "lbl-lastname", "Last Name"],
+    ["checkIn", "lbl-checkin", "Check-in"],
+    ["checkOut", "lbl-checkout", "Check-out"],
+  ];
+
+  async function loadHotelExportLabels() {
+    const res = await api("/events");
+    const events = await res.json();
+    const event = events.find((e) => e.id === eventId());
+    const labels = event?.hotelExportColumnLabels ?? {};
+    for (const [key, id, fallback] of HOTEL_LABEL_FIELDS) {
+      document.getElementById(id).value = labels[key] ?? fallback;
+    }
+  }
+
+  document.getElementById("save-labels").addEventListener("click", async () => {
+    const res = await api(`/events/${eventId()}/hotel-export-labels`, {
+      method: "PATCH",
+      body: JSON.stringify(
+        Object.fromEntries(HOTEL_LABEL_FIELDS.map(([key, id]) => [key, document.getElementById(id).value])),
+      ),
+    });
+    if (res.ok) showNotice("Column labels saved.", "success");
+  });
+
+  document.getElementById("export-csv").addEventListener("click", async () => {
+    const res = await api(`/events/${eventId()}/hotel-export.csv`);
+    if (!res.ok) return showNotice("Export failed.", "error");
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `hotel_export_${eventId()}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  });
+
+  document.getElementById("import-btn").addEventListener("click", async () => {
+    const fileInput = document.getElementById("import-file");
+    const file = fileInput.files[0];
+    if (!file) return showNotice("Choose a CSV file first.", "error");
+
+    const text = await file.text();
+    const res = await api(
+      `/events/${eventId()}/hotel-import?filename=${encodeURIComponent(file.name)}`,
+      { method: "POST", headers: { "Content-Type": "text/csv" }, body: text },
+    );
+    const data = await res.json();
+
+    document.getElementById("import-results").innerHTML = `
+      <table class="roster">
+        <thead><tr><th>Hotel's name</th><th>Confidence</th><th>Confirmation #</th><th></th></tr></thead>
+        <tbody>
+          ${data.rows
+            .map(
+              (r) => `
+            <tr>
+              <td>${escapeHtml(r.rawName)}</td>
+              <td>${escapeHtml(r.matchConfidence)}</td>
+              <td>${escapeHtml(r.rawConfirmation)}</td>
+              <td>${
+                r.matchedAttendeeId
+                  ? `<button class="btn ghost resolve-btn" data-row="${escapeHtml(r.rowId)}" data-attendee="${escapeHtml(r.matchedAttendeeId)}" data-conf="${escapeHtml(r.rawConfirmation)}">Confirm match</button>`
+                  : "needs manual match"
+              }</td>
+            </tr>`,
+            )
+            .join("")}
+        </tbody>
+      </table>
+      <p class="hint">Batch: ${escapeHtml(data.batchId)}</p>
+    `;
+
+    document.querySelectorAll(".resolve-btn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const res = await api(`/events/${eventId()}/hotel-import/${data.batchId}/resolve`, {
+          method: "POST",
+          body: JSON.stringify([
+            {
+              rowId: btn.dataset.row,
+              attendeeId: btn.dataset.attendee,
+              confirmationNumber: btn.dataset.conf,
+            },
+          ]),
+        });
+        if (res.ok) {
+          showNotice("Confirmation number applied.", "success");
+          btn.disabled = true;
+          btn.textContent = "Applied";
+        }
+      });
+    });
+  });
+
+  // ADR 0032 — real stat tiles for Overview, computed from data already
+  // fetched elsewhere (activity feed, pending changes) plus two additional
+  // lightweight GETs (roster, sub-events) that weren't previously fetched
+  // on this page. No new backend endpoints. "Dietary On File" is an
+  // honest approximation — count of attendees with at least one
+  // dietary_preference entry in the fetched activity feed window, not a
+  // dedicated aggregate the backend doesn't expose.
+  async function computeOverviewStats() {
+    if (!eventId()) return;
+    const [changesRes, rosterRes, subEventsRes] = await Promise.all([
+      api(`/events/${eventId()}/changes/pending`),
+      api(`/events/${eventId()}/attendees`),
+      api(`/events/${eventId()}/sub-events`),
+    ]);
+    const changes = await changesRes.json();
+    const roster = await rosterRes.json();
+    const subEvents = await subEventsRes.json();
+
+    document.querySelector("#stat-pending .value").textContent = changes.length;
+    const byField = changes.reduce((acc, c) => {
+      acc[c.fieldType] = (acc[c.fieldType] || 0) + 1;
+      return acc;
+    }, {});
+    document.querySelector("#stat-pending .delta").textContent = Object.entries(byField)
+      .map(([k, v]) => `${v} ${k}`)
+      .join(", ") || "none pending";
+
+    document.querySelector("#stat-activity .value").textContent = activityFeedCache.length;
+
+    const internal = roster.filter((a) => a.affiliation === "internal").length;
+    const external = roster.filter((a) => a.affiliation === "external").length;
+    const vip = roster.filter((a) => a.isVip).length;
+    document.querySelector("#stat-total .value").textContent = roster.length;
+    document.querySelector("#stat-total .delta").textContent = `${internal} internal · ${external} external · ${vip} VIP`;
+
+    const dietaryAttendees = new Set(
+      activityFeedCache.filter((r) => r.fieldType === "dietary_preference").map((r) => `${r.firstName} ${r.lastName}`),
+    );
+    document.querySelector("#stat-dietary .value").textContent = dietaryAttendees.size;
+
+    const published = subEvents.filter((se) => se.publishedPdfUrl).length;
+    document.querySelector("#stat-subevents .value").innerHTML = `${published}<span style="color:var(--ink-faint); font-weight:400;">/${subEvents.length}</span>`;
+    document.querySelector("#stat-subevents .delta").textContent = subEvents.length - published > 0 ? `${subEvents.length - published} PDF pending` : "all published";
+  }
+
+  const NAV_PAGES = ["events", "overview", "attendees", "subevents", "hotel", "event-settings", "organization"];
+  let currentPage = "overview";
+
+  function loadPageData(page) {
+    if (!eventId() && page !== "events" && page !== "organization") return;
+    if (page === "overview") {
+      loadOverviewActivity().then(computeOverviewStats);
+      loadOverviewUnclaimedAdmins();
+      loadEventNotes();
+    } else if (page === "attendees") {
+      loadChanges();
+      loadActivityFeed();
+      loadRequests();
+      loadRoster();
+    } else if (page === "subevents") {
+      loadSubEvents();
+    } else if (page === "hotel") {
+      loadHotelExportLabels();
+    } else if (page === "event-settings") {
+      loadEventDetails();
+      loadRegistrationSettings();
+    } else if (page === "events") {
+      loadEventList();
+    } else if (page === "organization") {
+      loadBranding();
+      loadApprovalConfig();
+      loadAdmins();
+    }
+  }
+
+  function showPage(page) {
+    currentPage = page;
+    for (const p of NAV_PAGES) {
+      document.getElementById(`page-${p}`).style.display = p === page ? "" : "none";
+    }
+    document.querySelectorAll(".nav-link").forEach((btn) => {
+      btn.classList.toggle("active", btn.dataset.page === page);
+    });
+    document.getElementById("active-event-banner").style.display = page === "events" || page === "organization" ? "none" : "";
+    localStorage.setItem("eventdesk_active_page", page);
+    loadPageData(page);
+    refreshNavBadges();
+  }
+
+  document.querySelectorAll(".nav-link").forEach((btn) => {
+    btn.addEventListener("click", () => showPage(btn.dataset.page));
+  });
+
+  (async () => {
+    loadBranding();
+    loadApprovalConfig();
+    loadAdmins();
+    await loadEventList();
+
+    if (!allEvents.find((e) => e.id === activeEventId)) {
+      activeEventId = allEvents.length > 0 ? allEvents[0].id : "";
+      localStorage.setItem("eventdesk_active_event", activeEventId);
+    }
+    document.getElementById("zero-events-notice").style.display = allEvents.length === 0 ? "" : "none";
+    renderActiveEventBanner();
+
+    const startPage = allEvents.length === 0 ? "events" : localStorage.getItem("eventdesk_active_page") || "overview";
+    showPage(startPage);
+  })();
+</script>
+</body>
+</html>

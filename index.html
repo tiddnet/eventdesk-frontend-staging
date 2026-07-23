@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<!-- ADR 0018 — defense-in-depth, not the primary fix (escaping is). script-src
+     still needs 'unsafe-inline': every page's logic is one inline <script>
+     block, no build step to add nonces. img-src allows any https: source
+     since ADR 0009's per-org branding logoUrl is an admin-set external URL. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:; connect-src 'self' https://staging-api.eventdesk.click; object-src 'none'; base-uri 'none'; frame-ancestors 'none';" />
+<title>EventDesk — Sign in</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<div class="shell" style="max-width: 420px; padding-top: 80px;">
+  <img id="org-logo" class="org-logo" alt="" />
+  <h1 id="heading">EventDesk</h1>
+  <p class="hint" id="subheading">Enter your email — we'll send a sign-in link.</p>
+
+  <div id="notice"></div>
+
+  <div class="card" id="admin-signin-card">
+    <div class="field">
+      <label for="email">Email</label>
+      <input id="email" type="email" placeholder="you@example.com" autocomplete="email" />
+    </div>
+    <button class="btn" id="submit-btn" style="width:100%;">Send sign-in link</button>
+    <p class="hint" style="margin: 10px 0 0;">For event admins. Guests: use the registration or sign-in link from your invitation.</p>
+  </div>
+
+  <!-- ADR 0029 — always shown once an event's page loads, independent of
+       allowSelfRegistration. Matches POST /register's existing-attendee
+       branch, which never checked that toggle to begin with — only the
+       create-new-attendee branch does. Lets a CSV-imported or
+       admin-added attendee get their own link on their own schedule
+       without an admin having to individually resend it for them. -->
+  <div class="card" id="lookup-card" style="display:none;">
+    <p class="hint" style="margin:0 0 10px;">Already on the list? Enter your email to get your sign-in link.</p>
+    <div class="field">
+      <label for="lookup-email">Email</label>
+      <input id="lookup-email" type="email" placeholder="you@example.com" autocomplete="email" />
+    </div>
+    <button class="btn" id="lookup-btn" style="width:100%;">Get my sign-in link</button>
+  </div>
+
+  <div class="card" id="register-card" style="display:none;">
+    <p class="hint" style="margin:0 0 10px;">New here? Register below.</p>
+    <div class="field-row">
+      <div class="field"><label for="reg-first">First name</label><input id="reg-first" /></div>
+      <div class="field"><label for="reg-last">Last name</label><input id="reg-last" /></div>
+    </div>
+    <div class="field">
+      <label for="reg-email">Email</label>
+      <input id="reg-email" type="email" placeholder="you@example.com" autocomplete="email" />
+    </div>
+    <div class="field">
+      <label for="reg-company">Company (optional)</label>
+      <input id="reg-company" />
+    </div>
+    <button class="btn" id="register-btn" style="width:100%;">Register</button>
+  </div>
+
+  <div class="card" id="closed-card" style="display:none;">
+    <p class="hint" style="margin:0;">New registration for this event is by invitation only. Already on the list? Use the form above to get your sign-in link.</p>
+  </div>
+</div>
+
+<script src="config.js"></script>
+<script>
+  const notice = document.getElementById("notice");
+
+  function showNotice(text, kind) {
+    notice.innerHTML = `<div class="notice ${kind}">${text}</div>`;
+  }
+
+  // ADR 0009 — applies an org's branding (if any) via the CSS custom
+  // properties style.css already expresses every color through. Null/
+  // missing fields are left alone, so a partial branding object (e.g. just
+  // a logo, no colors) doesn't fall back to nothing.
+  function applyBranding(branding) {
+    if (!branding) return;
+    if (branding.primaryColor) {
+      document.documentElement.style.setProperty("--navy", branding.primaryColor);
+      document.documentElement.style.setProperty("--navy-mid", branding.primaryColor);
+    }
+    if (branding.accentColor) {
+      document.documentElement.style.setProperty("--accent", branding.accentColor);
+    }
+    if (branding.logoUrl) {
+      const logo = document.getElementById("org-logo");
+      logo.src = branding.logoUrl;
+      logo.style.display = "block";
+    }
+  }
+
+  function showDevLinkOrSuccess(data, successText) {
+    if (data.devLink) {
+      showNotice(
+        `Dev mode — no email sent. <a href="${data.devLink}">Click here to continue</a>.`,
+        "warn",
+      );
+    } else if (data.emailDelivered === false) {
+      // ADR 0023 — Resend was configured but rejected the send (e.g. an
+      // unverified-domain restriction, a bad address). The underlying
+      // request already succeeded; only the notification failed.
+      showNotice(
+        "Something happened, but the email couldn't be sent. Try requesting a new link in a moment.",
+        "error",
+      );
+    } else {
+      showNotice(successText, "success");
+    }
+  }
+
+  async function requestAdminMagicLink() {
+    const email = document.getElementById("email").value.trim();
+    if (!email) return showNotice("Enter an email address.", "error");
+
+    const btn = document.getElementById("submit-btn");
+    btn.disabled = true;
+    btn.textContent = "Sending…";
+
+    try {
+      // No eventId here — this form only ever matches admin_memberships
+      // (see auth.ts). Guests use the event-scoped registration form below.
+      const res = await fetch(`${API_BASE_URL}/auth/magic-link`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      const data = await res.json();
+      showDevLinkOrSuccess(data, "Check your email for a sign-in link.");
+    } catch (err) {
+      showNotice("Something went wrong. Try again.", "error");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Send sign-in link";
+    }
+  }
+
+  // ADR 0029 — same endpoint as full registration, but only ever sends
+  // eventId + email. Only meaningful against an attendee who already
+  // exists (admin-added or CSV-imported) — a non-existent email gets the
+  // same generic response as everything else here, no enumeration.
+  async function submitLookup(eventId) {
+    const email = document.getElementById("lookup-email").value.trim();
+    if (!email) return showNotice("Enter an email address.", "error");
+
+    const btn = document.getElementById("lookup-btn");
+    btn.disabled = true;
+    btn.textContent = "Sending…";
+
+    try {
+      const res = await fetch(`${API_BASE_URL}/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ eventId, email }),
+      });
+      const data = await res.json();
+      showDevLinkOrSuccess(data, "Check your email — we've sent you a sign-in link.");
+    } catch (err) {
+      showNotice("Something went wrong. Try again.", "error");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Get my sign-in link";
+    }
+  }
+
+  async function submitRegistration(eventId) {
+    const firstName = document.getElementById("reg-first").value.trim();
+    const lastName = document.getElementById("reg-last").value.trim();
+    const email = document.getElementById("reg-email").value.trim();
+    const companyName = document.getElementById("reg-company").value.trim();
+
+    if (!firstName || !lastName || !email) {
+      return showNotice("First name, last name, and email are required.", "error");
+    }
+
+    const btn = document.getElementById("register-btn");
+    btn.disabled = true;
+    btn.textContent = "Submitting…";
+
+    try {
+      // Same endpoint whether this is a brand-new registration or a
+      // returning attendee who lost their link — the response looks
+      // identical either way, on purpose.
+      const res = await fetch(`${API_BASE_URL}/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ eventId, firstName, lastName, email, companyName }),
+      });
+      const data = await res.json();
+      showDevLinkOrSuccess(data, "Check your email — we've sent you a sign-in link.");
+    } catch (err) {
+      showNotice("Something went wrong. Try again.", "error");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Register";
+    }
+  }
+
+  async function setUpEventMode(eventId) {
+    try {
+      const res = await fetch(`${API_BASE_URL}/events/${encodeURIComponent(eventId)}/public`);
+      if (!res.ok) throw new Error("event not found");
+      const event = await res.json();
+
+      document.getElementById("admin-signin-card").style.display = "none";
+      document.getElementById("heading").textContent = event.name;
+      document.getElementById("subheading").textContent = `${event.startDate} – ${event.endDate}`;
+      applyBranding(event.branding);
+
+      // ADR 0029 — always available, independent of allowSelfRegistration.
+      document.getElementById("lookup-card").style.display = "";
+      document.getElementById("lookup-btn").addEventListener("click", () => submitLookup(eventId));
+      document.getElementById("lookup-email").addEventListener("keydown", (e) => {
+        if (e.key === "Enter") submitLookup(eventId);
+      });
+
+      if (event.allowSelfRegistration) {
+        document.getElementById("register-card").style.display = "";
+        document.getElementById("register-btn").addEventListener("click", () =>
+          submitRegistration(eventId),
+        );
+      } else {
+        document.getElementById("closed-card").style.display = "";
+      }
+    } catch (err) {
+      showNotice("That event link isn't valid.", "error");
+    }
+  }
+
+  // ADR 0019 — returns true only on a *successful* verify (redirects away
+  // immediately, so the caller never needs to do anything else). On
+  // failure/expiry, returns false so the caller can fall through to
+  // setUpEventMode() when a guest link's ?event= param is present — this
+  // used to unconditionally return true whenever a token existed, which
+  // meant an expired guest link could never reach that fallback at all.
+  async function verifyFromUrl() {
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get("token");
+    if (!token) return false;
+
+    showNotice("Signing you in…", "warn");
+    try {
+      const res = await fetch(
+        `${API_BASE_URL}/auth/verify?token=${encodeURIComponent(token)}`,
+      );
+      if (!res.ok) throw new Error("verify failed");
+      const data = await res.json();
+
+      localStorage.setItem("eventdesk_session", data.sessionToken);
+      localStorage.setItem("eventdesk_role", data.role);
+      // ADR 0005 — platform_admin is a third role; without this branch it
+      // would have silently fallen into the guest page.
+      const destinations = { admin: "admin.html", platform_admin: "platform.html" };
+      window.location.href = destinations[data.role] ?? "me.html";
+      return true;
+    } catch (err) {
+      const eventId = params.get("event");
+      if (!eventId) {
+        showNotice("That link is invalid or expired. Request a new one below.", "error");
+      }
+      // else: fall through silently — setUpEventMode's own card (register
+      // or closed) replaces the generic error with something actionable.
+      return false;
+    }
+  }
+
+  document.getElementById("submit-btn").addEventListener("click", requestAdminMagicLink);
+  document.getElementById("email").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") requestAdminMagicLink();
+  });
+
+  (async () => {
+    const handledToken = await verifyFromUrl();
+    if (handledToken) return;
+
+    const eventId = new URLSearchParams(window.location.search).get("event");
+    if (eventId) await setUpEventMode(eventId);
+  })();
+</script>
+</body>
+</html>

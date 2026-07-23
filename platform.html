@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<!-- ADR 0018 — see index.html for the full rationale/limitations note. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:; connect-src 'self' https://staging-api.eventdesk.click; object-src 'none'; base-uri 'none'; frame-ancestors 'none';" />
+<title>EventDesk — Platform</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<div class="shell">
+  <h1>Platform admin</h1>
+  <p class="hint">Create and view organizations (tenants), see a read-only event summary (names, dates, attendee counts — never the roster), and resend an admin's sign-in link. No access to any attendee's name, email, or other guest-facing data — that boundary is deliberate (ADR 0005, ADR 0016).</p>
+
+  <div id="notice"></div>
+
+  <div class="card">
+    <h2>Create organization</h2>
+    <div class="field-row">
+      <div class="field"><label for="org-name">Company name</label><input id="org-name" placeholder="Acme Trucking" /></div>
+      <div class="field"><label for="org-admin-email">First admin's email</label><input id="org-admin-email" type="email" placeholder="admin@acmetrucking.com" /></div>
+    </div>
+    <button class="btn" id="create-org-btn" style="width:100%;">Create organization</button>
+  </div>
+
+  <div class="card">
+    <h2>Organizations</h2>
+    <table>
+      <thead><tr><th>Name</th><th>Admin(s)</th><th>Status</th><th>Events</th><th>Created</th><th></th></tr></thead>
+      <tbody id="orgs-body"></tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>Platform admins</h2>
+    <p class="hint">Can't revoke yourself, and can't drop the platform to zero admins — both are server-enforced (ADR 0024).</p>
+    <table>
+      <thead><tr><th>Email</th><th>Created</th><th></th></tr></thead>
+      <tbody id="platform-admins-body"></tbody>
+    </table>
+  </div>
+</div>
+
+<script src="config.js"></script>
+<script>
+  const session = localStorage.getItem("eventdesk_session");
+  if (!session || localStorage.getItem("eventdesk_role") !== "platform_admin") {
+    window.location.href = "index.html";
+  }
+
+  const notice = document.getElementById("notice");
+  function showNotice(text, kind) {
+    notice.innerHTML = `<div class="notice ${kind}">${text}</div>`;
+  }
+
+  async function api(path, options = {}) {
+    const res = await fetch(`${API_BASE_URL}/platform${path}`, {
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${session}`,
+        ...(options.headers || {}),
+      },
+    });
+    if (res.status === 401) {
+      localStorage.clear();
+      window.location.href = "index.html";
+      throw new Error("session expired");
+    }
+    return res;
+  }
+
+  // ADR 0016 — each org's admin(s) surfaced inline (tenant metadata, not
+  // guest data); a "View events" toggle lazy-loads a read-only summary
+  // panel (event name/dates/attendee *count* only — never the roster)
+  // rather than navigating anywhere or minting a session for that org.
+  async function loadOrgs() {
+    const res = await api("/organizations");
+    const rows = await res.json();
+    document.getElementById("orgs-body").innerHTML = rows
+      .map(
+        (o) => `
+      <tr>
+        <td>${escapeHtml(o.name)}</td>
+        <td>
+          ${o.admins
+            .map(
+              (a) => `<div style="margin-bottom:2px;">${escapeHtml(a.email)} <span class="badge">${escapeHtml(a.role)}</span>
+                <button class="btn ghost resend-link-btn" data-org="${escapeHtml(o.id)}" data-membership="${escapeHtml(a.id)}" data-email="${escapeHtml(a.email)}" style="padding:1px 6px; font-size:10px;">Resend link</button></div>`,
+            )
+            .join("") || `<span class="hint" style="margin:0;">none</span>`}
+        </td>
+        <td><span class="badge ${o.status === "suspended" ? "vip" : ""}">${escapeHtml(o.status)}</span></td>
+        <td>
+          ${o.eventCount}
+          <button class="btn ghost view-events-btn" data-org="${escapeHtml(o.id)}" style="padding:2px 8px; font-size:11px; margin-left:6px;">View</button>
+        </td>
+        <td>${new Date(o.createdAt).toLocaleDateString()}</td>
+        <td>
+          <button class="btn ghost suspend-btn" data-org="${escapeHtml(o.id)}" data-status="${escapeHtml(o.status)}" style="padding:4px 8px; font-size:11px;">
+            ${o.status === "suspended" ? "Reactivate" : "Suspend"}
+          </button>
+          <button class="btn ghost delete-btn" data-org="${escapeHtml(o.id)}" data-name="${escapeHtml(o.name)}" data-events="${o.eventCount}" style="padding:4px 8px; font-size:11px; color:var(--accent);" ${o.eventCount > 0 ? "disabled title=\"Has events — suspend instead\"" : ""}>
+            Delete
+          </button>
+        </td>
+      </tr>
+      <tr id="events-panel-${escapeHtml(o.id)}" style="display:none;"><td colspan="6" style="background:var(--bg);"></td></tr>`,
+      )
+      .join("");
+
+    document.querySelectorAll(".resend-link-btn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const res = await api(`/organizations/${btn.dataset.org}/admins/${btn.dataset.membership}/resend-link`, {
+          method: "POST",
+        });
+        const data = await res.json();
+        if (res.ok) {
+          // ADR 0018 — btn.dataset.email is the browser's decoded copy of
+          // the attribute we escaped on write; interpolating it into a
+          // *second* HTML string here needs its own escape, the write-time
+          // escaping doesn't carry over.
+          // ADR 0023 — emailDelivered:false means Resend rejected the
+          // send; the recovery path is just clicking this same button
+          // again once the underlying issue (e.g. domain verification)
+          // is fixed.
+          showNotice(
+            data.devLink
+              ? `Dev mode — no email sent: <a href="${escapeHtml(data.devLink)}">${escapeHtml(btn.dataset.email)}'s sign-in link</a>.`
+              : data.emailDelivered === false
+                ? `Couldn't send the sign-in link to ${escapeHtml(btn.dataset.email)} — try again in a moment.`
+                : `Sign-in link resent to ${escapeHtml(btn.dataset.email)}.`,
+            data.emailDelivered === false ? "error" : "success",
+          );
+        } else {
+          showNotice(data.error ?? "Could not resend link.", "error");
+        }
+      });
+    });
+
+    document.querySelectorAll(".view-events-btn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const panel = document.getElementById(`events-panel-${btn.dataset.org}`);
+        const isOpen = panel.style.display !== "none";
+        if (isOpen) {
+          panel.style.display = "none";
+          btn.textContent = "View";
+          return;
+        }
+        panel.style.display = "";
+        btn.textContent = "Hide";
+        const cell = panel.querySelector("td");
+        cell.innerHTML = `<p class="hint" style="margin:8px 0;">Loading…</p>`;
+        const res = await api(`/organizations/${btn.dataset.org}/events`);
+        const evs = await res.json();
+        cell.innerHTML = evs.length
+          ? `<table style="margin:8px 0;"><thead><tr><th>Event</th><th>Dates</th><th>Attendees</th></tr></thead><tbody>
+              ${evs.map((e) => `<tr><td>${escapeHtml(e.name)}</td><td>${escapeHtml(e.startDate)} – ${escapeHtml(e.endDate)}</td><td>${e.attendeeCount}</td></tr>`).join("")}
+             </tbody></table>`
+          : `<p class="hint" style="margin:8px 0;">No events yet.</p>`;
+      });
+    });
+
+    document.querySelectorAll(".suspend-btn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const newStatus = btn.dataset.status === "suspended" ? "active" : "suspended";
+        const res = await api(`/organizations/${btn.dataset.org}`, {
+          method: "PATCH",
+          body: JSON.stringify({ status: newStatus }),
+        });
+        if (res.ok) {
+          showNotice(`Organization ${newStatus === "suspended" ? "suspended" : "reactivated"}.`, "success");
+          loadOrgs();
+        }
+      });
+    });
+
+    document.querySelectorAll(".delete-btn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        if (!confirm(`Permanently delete "${btn.dataset.name}"? This cannot be undone.`)) return;
+        const res = await api(`/organizations/${btn.dataset.org}`, { method: "DELETE" });
+        if (res.ok) {
+          showNotice("Organization deleted.", "success");
+          loadOrgs();
+        } else {
+          const err = await res.json();
+          showNotice(err.error ?? "Could not delete organization.", "error");
+        }
+      });
+    });
+  }
+
+  // ADR 0024 — same shape as admin.html's Admins card one tier down: list
+  // + Revoke button + confirm(). Self-revoke and last-platform-admin
+  // guards produce a clear error on the server; no client-side prediction
+  // of which platform admin is "self" beyond disabling nothing — the
+  // server is the source of truth, same reasoning as the admin-tier card.
+  async function loadPlatformAdmins() {
+    const res = await api("/admins");
+    const rows = await res.json();
+    document.getElementById("platform-admins-body").innerHTML = rows.length === 0
+      ? `<tr><td colspan="3" class="hint">No platform admins listed.</td></tr>`
+      : rows
+          .map(
+            (a) => `<tr><td>${escapeHtml(a.email)}</td><td>${new Date(a.createdAt).toLocaleDateString()}</td><td><button class="btn ghost revoke-platform-admin-btn" data-id="${escapeHtml(a.id)}" data-email="${escapeHtml(a.email)}" style="padding:4px 8px; font-size:11px; color:var(--accent);">Revoke</button></td></tr>`,
+          )
+          .join("");
+
+    document.querySelectorAll(".revoke-platform-admin-btn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        if (!confirm(`Revoke ${btn.dataset.email}'s platform admin access? This can't be undone.`)) return;
+        const res = await api(`/admins/${btn.dataset.id}`, { method: "DELETE" });
+        if (res.ok) {
+          showNotice("Platform admin access revoked.", "success");
+          loadPlatformAdmins();
+        } else {
+          const err = await res.json();
+          showNotice(err.error ?? "Could not revoke platform admin.", "error");
+        }
+      });
+    });
+  }
+
+  document.getElementById("create-org-btn").addEventListener("click", async () => {
+    const name = document.getElementById("org-name").value.trim();
+    const adminEmail = document.getElementById("org-admin-email").value.trim();
+    if (!name || !adminEmail) {
+      return showNotice("Company name and first admin email are both required.", "error");
+    }
+
+    const btn = document.getElementById("create-org-btn");
+    btn.disabled = true;
+    btn.textContent = "Creating…";
+
+    try {
+      const res = await api("/organizations", {
+        method: "POST",
+        body: JSON.stringify({ name, adminEmail }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        // ADR 0023 — the org + admin membership were created either way;
+        // only the invite email can fail. The org list's own resend-link
+        // button (ADR 0016) is the recovery path.
+        showNotice(
+          data.devLink
+            ? `"${escapeHtml(name)}" created. Dev mode — no email sent to the new admin: <a href="${escapeHtml(data.devLink)}">their sign-in link</a>.`
+            : data.emailDelivered === false
+              ? `"${escapeHtml(name)}" created, but the invite email to ${escapeHtml(adminEmail)} couldn't be sent — use the resend-link button on the org list.`
+              : `"${escapeHtml(name)}" created — an invite was sent to ${escapeHtml(adminEmail)}.`,
+          data.emailDelivered === false ? "error" : "success",
+        );
+        document.getElementById("org-name").value = "";
+        document.getElementById("org-admin-email").value = "";
+        loadOrgs();
+      } else {
+        showNotice(data.error ?? "Could not create organization.", "error");
+      }
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Create organization";
+    }
+  });
+
+  loadOrgs();
+  loadPlatformAdmins();
+</script>
+</body>
+</html>

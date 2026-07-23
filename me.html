@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<!-- ADR 0018 — see index.html for the full rationale/limitations note. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:; connect-src 'self' https://staging-api.eventdesk.click; object-src 'none'; base-uri 'none'; frame-ancestors 'none';" />
+<title>EventDesk — Your registration</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<div class="shell">
+  <img id="org-logo" class="org-logo" alt="" />
+  <h1 id="attendee-name">Your registration</h1>
+  <p class="hint">Internal/external status and travel window are set by the event organizer.</p>
+
+  <div id="notice"></div>
+
+  <div class="card">
+    <h2>Dietary preference</h2>
+    <p class="hint">Applies immediately — no review needed.</p>
+    <div class="field-row">
+      <div class="field">
+        <label for="preference">Preference</label>
+        <select id="preference">
+          <option value="">No restrictions</option>
+          <option value="vegetarian">Vegetarian</option>
+          <option value="vegan">Vegan</option>
+          <option value="gluten_free">Gluten-free</option>
+          <option value="allergy">Severe allergy — see notes</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="allergyDetail">Allergy detail</label>
+        <input id="allergyDetail" placeholder="e.g. peanut, tree nut" />
+      </div>
+    </div>
+    <button class="btn" id="save-dietary">Save</button>
+  </div>
+
+  <div class="card">
+    <h2>Hotel</h2>
+    <div id="hotel-section"></div>
+  </div>
+
+  <div class="card" id="flight-card">
+    <h2>Flight information</h2>
+    <div id="flight-section"></div>
+  </div>
+
+  <div class="card" id="sub-events-card" style="display:none;">
+    <h2>Sessions</h2>
+    <div id="sub-events-section"></div>
+  </div>
+</div>
+
+<script src="config.js"></script>
+<script>
+  const session = localStorage.getItem("eventdesk_session");
+  if (!session || localStorage.getItem("eventdesk_role") !== "guest") {
+    window.location.href = "index.html";
+  }
+
+  const notice = document.getElementById("notice");
+  function showNotice(text, kind) {
+    notice.innerHTML = `<div class="notice ${kind}">${text}</div>`;
+  }
+
+  // ADR 0009 — same theming approach as index.html; me.html has no
+  // ?event= query param (it's reached via a stored session, not a URL), so
+  // it resolves eventId from /me's own response instead, then fetches the
+  // same public endpoint index.html uses.
+  function applyBranding(branding) {
+    if (!branding) return;
+    if (branding.primaryColor) {
+      document.documentElement.style.setProperty("--navy", branding.primaryColor);
+      document.documentElement.style.setProperty("--navy-mid", branding.primaryColor);
+    }
+    if (branding.accentColor) {
+      document.documentElement.style.setProperty("--accent", branding.accentColor);
+    }
+    if (branding.logoUrl) {
+      const logo = document.getElementById("org-logo");
+      logo.src = branding.logoUrl;
+      logo.style.display = "block";
+    }
+  }
+
+  // Event dates were already being fetched here for nothing but branding —
+  // reused to show the event's own dates alongside the hotel-request
+  // fields (renderHotel below) so a guest doesn't have to look them up
+  // separately. Runs once (loadMe's brandingLoaded guard); re-renders
+  // renderHotel afterward since the first render already happened before
+  // this fetch resolves.
+  let eventDates = null;
+  let currentAttendee = null;
+
+  async function loadBranding(eventId) {
+    try {
+      const res = await fetch(`${API_BASE_URL}/events/${encodeURIComponent(eventId)}/public`);
+      if (!res.ok) return;
+      const event = await res.json();
+      applyBranding(event.branding);
+      eventDates = { startDate: event.startDate, endDate: event.endDate };
+      // ADR 0033 — the org can turn flight tracking off entirely; default
+      // true so older cached responses (or a failed fetch) keep the
+      // section visible rather than silently hiding a real feature.
+      document.getElementById("flight-card").style.display =
+        event.flightTrackingEnabled === false ? "none" : "";
+      if (currentAttendee) renderHotel(currentAttendee);
+    } catch (err) {
+      // Branding/dates are cosmetic — a failed fetch here shouldn't block the page.
+    }
+  }
+
+  async function api(path, options = {}) {
+    const res = await fetch(`${API_BASE_URL}${path}`, {
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${session}`,
+        ...(options.headers || {}),
+      },
+    });
+    if (res.status === 401) {
+      localStorage.clear();
+      window.location.href = "index.html";
+      throw new Error("session expired");
+    }
+    return res;
+  }
+
+  function renderHotel(attendee) {
+    const el = document.getElementById("hotel-section");
+    const hotel = attendee.hotel;
+
+    if (hotel.status === "confirmed") {
+      el.innerHTML = `
+        <div class="field-row">
+          <div class="field">
+            <label>Room</label>
+            <div class="readonly-field">${escapeHtml(hotel.roomNumber ?? "—")}</div>
+          </div>
+          <div class="field">
+            <label>Confirmation code</label>
+            <div class="readonly-field">${escapeHtml(hotel.confirmationNumber ?? "Pending")}</div>
+          </div>
+        </div>
+        <p class="hint">Check-in ${escapeHtml(hotel.checkInDate)} → Check-out ${escapeHtml(hotel.checkOutDate)}</p>
+      `;
+      return;
+    }
+
+    const alreadyRequested = hotel.openRequests.length > 0;
+    const eventDatesHint = eventDates
+      ? ` The event runs ${escapeHtml(eventDates.startDate)} – ${escapeHtml(eventDates.endDate)}.`
+      : "";
+    el.innerHTML = `
+      <p class="hint">We haven't booked your room yet — tell us your dates and we'll confirm a room and code here.${eventDatesHint}</p>
+      ${alreadyRequested ? `<div class="notice warn">Request submitted: ${escapeHtml(hotel.openRequests[0].requestedCheckIn)} → ${escapeHtml(hotel.openRequests[0].requestedCheckOut)}. Awaiting booking.</div>` : ""}
+      <div class="field-row">
+        <div class="field"><label for="checkin">Preferred check-in</label><input id="checkin" type="date" /></div>
+        <div class="field"><label for="checkout">Preferred check-out</label><input id="checkout" type="date" /></div>
+      </div>
+      <div class="field">
+        <label for="hotel-note">Anything we should know?</label>
+        <input id="hotel-note" placeholder="Arriving early, need a pet-friendly room, etc." />
+      </div>
+      <button class="btn" id="submit-hotel-request">${alreadyRequested ? "Update request" : "Submit availability"}</button>
+    `;
+
+    document.getElementById("submit-hotel-request").addEventListener("click", async () => {
+      const requestedCheckIn = document.getElementById("checkin").value;
+      const requestedCheckOut = document.getElementById("checkout").value;
+      if (!requestedCheckIn || !requestedCheckOut) {
+        return showNotice("Pick both a check-in and check-out date.", "error");
+      }
+      const res = await api("/me/hotel-request", {
+        method: "POST",
+        body: JSON.stringify({
+          requestedCheckIn,
+          requestedCheckOut,
+          note: document.getElementById("hotel-note").value,
+        }),
+      });
+      if (res.ok) {
+        showNotice("Thanks — we'll confirm your room here once it's booked.", "success");
+        loadMe();
+      } else {
+        const err = await res.json();
+        showNotice(err.error ?? "Something went wrong.", "error");
+      }
+    });
+  }
+
+  function renderFlight(attendee) {
+    const el = document.getElementById("flight-section");
+    const flight = attendee.flight;
+
+    if (flight && !flight.selfManaged) {
+      el.innerHTML = `
+        <p class="hint">Booked directly by our team.</p>
+        <div class="field-row">
+          <div class="field"><label>Arrival</label><div class="readonly-field">${escapeHtml(flight.arrivalFlight ?? "—")}</div></div>
+          <div class="field"><label>Departure</label><div class="readonly-field">${escapeHtml(flight.departureFlight ?? "—")}</div></div>
+        </div>
+      `;
+      return;
+    }
+
+    const pending = flight?.pendingChange;
+    el.innerHTML = `
+      <p class="hint">Most employee travel is booked by our team. As an external guest, you're managing your own.</p>
+      ${pending ? `<div class="notice warn">⏳ Pending review: ${escapeHtml(pending.arrivalFlight || "—")} / ${escapeHtml(pending.departureFlight || "—")}. The values below still show what's currently confirmed until the organizer approves it.</div>` : ""}
+      <div class="field-row">
+        <div class="field"><label for="arrival">Arrival flight</label><input id="arrival" value="${escapeHtml(flight?.arrivalFlight ?? "")}" /></div>
+        <div class="field"><label for="departure">Departure flight</label><input id="departure" value="${escapeHtml(flight?.departureFlight ?? "")}" /></div>
+      </div>
+      <button class="btn" id="save-flight" ${pending ? "disabled" : ""}>${pending ? "Awaiting review" : "Save"}</button>
+    `;
+
+    if (!pending) {
+      document.getElementById("save-flight").addEventListener("click", async () => {
+        const res = await api("/me/flight", {
+          method: "PATCH",
+          body: JSON.stringify({
+            arrivalFlight: document.getElementById("arrival").value,
+            departureFlight: document.getElementById("departure").value,
+          }),
+        });
+        if (res.ok) {
+          showNotice("Submitted — your organizer will review it before it's confirmed.", "success");
+          loadMe();
+        }
+      });
+    }
+  }
+
+  // ADR 0010 — sessions a guest can opt into. signedUp reflects the
+  // guest's own attendance row regardless of how they got enrolled
+  // (self-signup, admin bulk-enroll, or auto-enroll) — the DELETE route
+  // doesn't distinguish source, so "Leave" works the same for all three.
+  async function loadSubEvents() {
+    const res = await api("/sub-events");
+    if (!res.ok) return;
+    const subEvents = await res.json();
+    const card = document.getElementById("sub-events-card");
+    if (subEvents.length === 0) {
+      card.style.display = "none";
+      return;
+    }
+    card.style.display = "";
+
+    document.getElementById("sub-events-section").innerHTML = subEvents
+      .map(
+        (se) => `
+      <div class="field-row" style="align-items:center; margin-bottom: 10px;">
+        <div>
+          <strong>${escapeHtml(se.name)}</strong><br />
+          <span class="hint" style="margin:0;">${new Date(se.startsAt).toLocaleString()} – ${new Date(se.endsAt).toLocaleString()}${se.location ? ` · ${escapeHtml(se.location)}` : ""}</span>
+        </div>
+        <button class="btn ${se.signedUp ? "ghost" : ""} sub-event-toggle-btn" data-id="${escapeHtml(se.id)}" data-signed-up="${se.signedUp}">
+          ${se.signedUp ? "Signed up ✓ — Leave" : "Sign up"}
+        </button>
+      </div>`,
+      )
+      .join("");
+
+    document.querySelectorAll(".sub-event-toggle-btn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const signedUp = btn.dataset.signedUp === "true";
+        const res = await api(`/sub-events/${btn.dataset.id}/signup`, {
+          method: signedUp ? "DELETE" : "POST",
+        });
+        if (res.ok) loadSubEvents();
+      });
+    });
+  }
+
+  async function loadMe() {
+    const res = await api("/me");
+    const attendee = await res.json();
+    currentAttendee = attendee;
+
+    document.getElementById("attendee-name").textContent = `${attendee.firstName} ${attendee.lastName}`;
+    document.getElementById("preference").value = attendee.dietary?.preference ?? "";
+    document.getElementById("allergyDetail").value = attendee.dietary?.allergyDetail ?? "";
+    renderHotel(attendee);
+    renderFlight(attendee);
+    loadSubEvents();
+    if (!loadMe.brandingLoaded) {
+      loadMe.brandingLoaded = true;
+      loadBranding(attendee.eventId);
+    }
+  }
+
+  document.getElementById("save-dietary").addEventListener("click", async () => {
+    const res = await api("/me/dietary", {
+      method: "PATCH",
+      body: JSON.stringify({
+        preference: document.getElementById("preference").value,
+        allergyDetail: document.getElementById("allergyDetail").value,
+      }),
+    });
+    if (res.ok) showNotice("Dietary preference saved.", "success");
+  });
+
+  loadMe();
+</script>
+</body>
+</html>
