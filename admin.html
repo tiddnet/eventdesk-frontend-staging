@@ -99,6 +99,7 @@
       <button class="nav-link" data-page="attendees">Attendees <span class="nav-badge" id="attendees-nav-badge" style="display:none;"></span></button>
       <button class="nav-link" data-page="subevents">Sub-events</button>
       <button class="nav-link" data-page="hotel">Hotel</button>
+      <button class="nav-link" data-page="dietary">Dietary</button>
       <button class="nav-link" data-page="event-settings">Event settings</button>
       <hr class="nav-divider" />
       <button class="nav-link" data-page="organization">Organization</button>
@@ -299,6 +300,26 @@
               <div id="import-results" style="margin-top: 14px;"></div>
             </div>
           </div>
+        </div>
+      </div>
+
+      <!-- ============================== Dietary (ADR 0036) ============================== -->
+      <div class="page" id="page-dietary" style="display:none;">
+        <div class="stat-row" id="dietary-stat-row"></div>
+
+        <div class="panel">
+          <div class="panel-head"><h2>Special cases</h2><span class="count-pill" id="dietary-special-count-pill">0</span></div>
+          <div class="panel-sub">Anything other than "No restrictions," allergies sorted first — make sure a meal is available for everyone here.</div>
+          <table class="roster">
+            <thead><tr><th>Attendee</th><th>Affiliation</th><th>Preference</th><th>Allergy detail</th></tr></thead>
+            <tbody id="dietary-special-cases-body"></tbody>
+          </table>
+        </div>
+
+        <div class="card">
+          <h2>Export</h2>
+          <p class="hint">Full roster, one row per attendee — hand this to the caterer. Includes a Meal Choice column, currently always blank (ADR 0036) — ready for a future specific-entrée feature without needing to redesign this report.</p>
+          <button class="btn ghost" id="dietary-export-csv">Export CSV</button>
         </div>
       </div>
 
@@ -1445,6 +1466,97 @@
     });
   });
 
+  // ADR 0036 — Dietary report. Current-state (via attendee_dietary_preferences,
+  // LEFT JOINed server-side so a not-yet-submitted attendee still appears
+  // with null preference), not the change-log Overview/Attendees already
+  // show. Raw values below match exactly what me.html's <select> submits
+  // (lowercase/snake_case option values, e.g. "gluten_free"), NOT the
+  // human-readable label text — confirmed against frontend/me.html and
+  // guest.ts (stores body.preference verbatim, no transformation) before
+  // writing this, not assumed.
+  const DIETARY_CATEGORIES = [
+    { raw: "", label: "No Restrictions" },
+    { raw: "vegetarian", label: "Vegetarian" },
+    { raw: "vegan", label: "Vegan" },
+    { raw: "gluten_free", label: "Gluten-Free" },
+    { raw: "allergy", label: "Severe Allergy" },
+  ];
+  function dietaryLabel(raw) {
+    return DIETARY_CATEGORIES.find((c) => c.raw === raw)?.label ?? raw;
+  }
+
+  let dietaryReportCache = [];
+
+  async function loadDietaryReport() {
+    const res = await api(`/events/${eventId()}/dietary-report`);
+    dietaryReportCache = await res.json();
+
+    // Not-yet-submitted = no attendee_dietary_preferences row at all
+    // (preference is null). Distinct from an attendee who explicitly
+    // chose "No restrictions" — that stores "" (an actual answer), not
+    // null (silence) — same distinction the real submitted values draw.
+    const notSubmitted = dietaryReportCache.filter((a) => a.preference === null && a.allergyDetail === null);
+    const submitted = dietaryReportCache.filter((a) => !(a.preference === null && a.allergyDetail === null));
+
+    const tiles = DIETARY_CATEGORIES.map(
+      (cat) => `
+      <div class="stat-tile${cat.raw === "allergy" ? " attn" : ""}">
+        <div class="label">${escapeHtml(cat.label)}</div>
+        <div class="value">${submitted.filter((a) => a.preference === cat.raw).length}</div>
+      </div>`,
+    ).join("");
+    document.getElementById("dietary-stat-row").innerHTML = `
+      ${tiles}
+      <div class="stat-tile">
+        <div class="label">Not Yet Submitted</div>
+        <div class="value">${notSubmitted.length}</div>
+      </div>`;
+
+    // Special cases: anything other than "No restrictions"/unset,
+    // allergies first — this is the "make sure a meal exists for them"
+    // list, not a full roster dump.
+    const special = dietaryReportCache
+      .filter((a) => a.preference && a.preference !== "")
+      .sort((a, b) => (a.preference === "allergy" ? 0 : 1) - (b.preference === "allergy" ? 0 : 1));
+    document.getElementById("dietary-special-count-pill").textContent = special.length;
+    document.getElementById("dietary-special-cases-body").innerHTML = special.length === 0
+      ? `<tr><td colspan="4" class="hint">No special cases on file.</td></tr>`
+      : special
+      .map(
+        (a) => `
+      <tr ${a.isVip ? 'style="background:var(--warning-soft);"' : ""}>
+        <td>${escapeHtml(a.firstName)} ${escapeHtml(a.lastName)} ${a.isVip ? '<span class="badge vip">VIP</span>' : ""}</td>
+        <td><span class="badge">${escapeHtml(a.affiliation)}</span></td>
+        <td>${escapeHtml(dietaryLabel(a.preference))}</td>
+        <td>${escapeHtml(a.allergyDetail ?? "")}</td>
+      </tr>`,
+      )
+      .join("");
+  }
+
+  document.getElementById("dietary-export-csv").addEventListener("click", () => {
+    // Client-side, from the same data already fetched for the summary/
+    // special-cases views above — deliberately not a second server round
+    // trip (ADR 0036). "Meal Choice" stays blank — reserved so a future
+    // specific-entrée feature (Pork/Fish/Pasta) only needs to start
+    // populating this column, not redesign the export.
+    const header = ["First Name", "Last Name", "Affiliation", "Preference", "Allergy Detail", "Meal Choice"];
+    const csvEscape = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const rows = dietaryReportCache.map((a) =>
+      [a.firstName, a.lastName, a.affiliation, a.preference === null ? "Not submitted" : dietaryLabel(a.preference), a.allergyDetail ?? "", ""]
+        .map(csvEscape)
+        .join(","),
+    );
+    const csv = [header.map(csvEscape).join(","), ...rows].join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `dietary_report_${eventId()}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  });
+
   // ADR 0032 — real stat tiles for Overview, computed from data already
   // fetched elsewhere (activity feed, pending changes) plus two additional
   // lightweight GETs (roster, sub-events) that weren't previously fetched
@@ -1490,7 +1602,7 @@
     document.querySelector("#stat-subevents .delta").textContent = subEvents.length - published > 0 ? `${subEvents.length - published} PDF pending` : "all published";
   }
 
-  const NAV_PAGES = ["events", "overview", "attendees", "subevents", "hotel", "event-settings", "organization"];
+  const NAV_PAGES = ["events", "overview", "attendees", "subevents", "hotel", "dietary", "event-settings", "organization"];
   let currentPage = "overview";
 
   function loadPageData(page) {
@@ -1508,6 +1620,8 @@
       loadSubEvents();
     } else if (page === "hotel") {
       loadHotelExportLabels();
+    } else if (page === "dietary") {
+      loadDietaryReport();
     } else if (page === "event-settings") {
       loadEventDetails();
       loadRegistrationSettings();
