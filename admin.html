@@ -277,6 +277,8 @@
 
       <!-- ============================== Hotel ============================== -->
       <div class="page" id="page-hotel" style="display:none;">
+        <div id="hotel-frozen-banner"></div>
+
         <div class="card-row">
           <div class="panel" style="margin-bottom:0;">
             <div class="panel-head"><h2>Hotel export</h2></div>
@@ -301,10 +303,23 @@
             </div>
           </div>
         </div>
+
+        <!-- ADR 0038 — every confirmed assignment, with a direct edit action
+             so an admin can nudge dates for anyone, not only attendees who
+             happen to have an open request. -->
+        <div class="panel">
+          <div class="panel-head"><h2>Hotel assignments</h2></div>
+          <div class="panel-sub">Confirmed bookings — edit to nudge a date, even without an open request.</div>
+          <table class="roster">
+            <thead><tr><th>Attendee</th><th>Room</th><th>Check-in</th><th>Check-out</th><th></th></tr></thead>
+            <tbody id="hotel-assignments-body"></tbody>
+          </table>
+        </div>
       </div>
 
       <!-- ============================== Dietary (ADR 0036) ============================== -->
       <div class="page" id="page-dietary" style="display:none;">
+        <div id="meals-frozen-banner"></div>
         <div class="stat-row" id="dietary-stat-row"></div>
 
         <div class="panel">
@@ -350,6 +365,16 @@
             <button class="btn ghost" id="copy-registration-link" style="padding: 2px 8px; font-size: 11px;">Copy</button>
           </p>
         </div>
+
+        <!-- ADR 0038 — hotel and catering go to different outside vendors on
+             different lead times, so each is published/frozen independently.
+             No Flights row — deferred, see ADR 0039. -->
+        <div class="card">
+          <h2>Freeze changes</h2>
+          <p class="hint">Once you've sent a final list to a vendor, publish it here to stop guests from submitting further changes to that field — you can always un-publish later if the vendor allows one more round.</p>
+          <div id="freeze-hotel-row" class="freeze-row"></div>
+          <div id="freeze-meals-row" class="freeze-row" style="margin-top: 14px;"></div>
+        </div>
       </div>
 
       <!-- ============================== Organization ============================== -->
@@ -393,6 +418,10 @@
             </div>
           </div>
           <p class="hint" style="margin-top: -4px;">0 = links never expire. A magic link that never expires can't be individually revoked if it leaks — only turn this on if you understand that tradeoff.</p>
+          <label style="font-size: 12.5px; display:block; margin-top: 14px;">
+            <input type="checkbox" id="notify-guest-hotel-change-email" /> Email me when a guest submits a hotel date change
+          </label>
+          <p class="hint" style="margin-top: -4px;">The Hotel requests queue and its nav badge always show these — this only adds an email on top.</p>
           <button class="btn ghost" id="save-feature-settings">Save</button>
         </div>
 
@@ -701,6 +730,60 @@
     renderActivityRows("overview-flight-body", rows.filter((r) => r.fieldType === "flight_info"));
   }
 
+  // ADR 0038 — the old "Book room" flow only ever asked for a room number
+  // via prompt() and silently reused whatever dates the guest requested.
+  // Now it's a real inline form (room + check-in + check-out) so an admin
+  // can nudge a date before confirming — the fix for the original ask.
+  // editingHotelAttendeeId tracks which row (if any) currently shows the
+  // form instead of its normal action buttons, same pattern as
+  // editingAttendeeId above for the attendee roster's edit form.
+  let editingHotelAttendeeId = null;
+
+  function hotelAssignmentFormHtml(attendeeId, checkIn, checkOut, roomNumber) {
+    return `
+      <div class="hotel-assignment-form" style="display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap;">
+        <div class="field"><label>Room</label><input class="haf-room" value="${escapeHtml(roomNumber ?? "")}" style="max-width:110px;" /></div>
+        <div class="field"><label>Check-in</label><input class="haf-in" type="date" value="${escapeHtml(checkIn ?? "")}" /></div>
+        <div class="field"><label>Check-out</label><input class="haf-out" type="date" value="${escapeHtml(checkOut ?? "")}" /></div>
+        <button class="btn haf-save" data-attendee="${escapeHtml(attendeeId)}">Save</button>
+        <button class="btn ghost haf-cancel" style="color:var(--ink-faint);">Cancel</button>
+      </div>`;
+  }
+
+  function wireHotelAssignmentForm(scope, onSaved) {
+    const root = document.querySelector(scope);
+    if (!root) return;
+    const saveBtn = root.querySelector(".haf-save");
+    const cancelBtn = root.querySelector(".haf-cancel");
+    if (cancelBtn) {
+      cancelBtn.addEventListener("click", () => {
+        editingHotelAttendeeId = null;
+        onSaved();
+      });
+    }
+    if (saveBtn) {
+      saveBtn.addEventListener("click", async () => {
+        const checkInDate = root.querySelector(".haf-in").value;
+        const checkOutDate = root.querySelector(".haf-out").value;
+        const roomNumber = root.querySelector(".haf-room").value;
+        if (!checkInDate || !checkOutDate) return showNotice("Check-in and check-out dates are both required.", "error");
+        const res = await api(`/attendees/${saveBtn.dataset.attendee}/hotel-assignment`, {
+          method: "POST",
+          body: JSON.stringify({ checkInDate, checkOutDate, roomNumber }),
+        });
+        if (res.ok) {
+          showNotice("Hotel dates saved — the guest gets an email confirming the new dates.", "success");
+          editingHotelAttendeeId = null;
+          onSaved();
+          refreshNavBadges();
+        } else {
+          const err = await res.json();
+          showNotice(err.error ?? "Could not save hotel dates.", "error");
+        }
+      });
+    }
+  }
+
   async function loadRequests() {
     const res = await api(`/events/${eventId()}/hotel-requests`);
     const rows = await res.json();
@@ -708,39 +791,35 @@
     document.getElementById("requests-body").innerHTML = rows.length === 0
       ? `<div class="panel-empty">No open hotel requests.</div>`
       : rows
-      .map(
-        (r) => `
-      <div class="change-row" ${r.isVip ? 'style="background:var(--warning-soft);"' : ""}>
+      .map((r) => {
+        const editing = editingHotelAttendeeId === r.attendeeId;
+        return `
+      <div class="change-row" ${r.isVip ? 'style="background:var(--warning-soft);"' : ""} ${editing ? `id="haf-row-${escapeHtml(r.attendeeId)}"` : ""}>
         <div class="change-avatar" ${r.isVip ? 'style="background:var(--warning); color:#fff;"' : ""}>${initials(r.firstName, r.lastName)}</div>
         <div class="change-text">
           <div class="who">${escapeHtml(r.firstName)} ${escapeHtml(r.lastName)} ${r.isVip ? '<span class="badge vip">VIP</span>' : ""}</div>
           <div class="what">Requested ${escapeHtml(r.requestedCheckIn)} → ${escapeHtml(r.requestedCheckOut)} ${r.note ? `<span class="source-tag">· "${escapeHtml(r.note)}"</span>` : ""}</div>
         </div>
-        <div class="change-actions">
+        ${
+          editing
+            ? hotelAssignmentFormHtml(r.attendeeId, r.requestedCheckIn, r.requestedCheckOut, "")
+            : `<div class="change-actions">
           <button class="btn ghost dismiss-request-btn" data-request="${escapeHtml(r.requestId)}" style="color:var(--ink-faint);">Dismiss</button>
-          <button class="btn book-btn" data-attendee="${escapeHtml(r.attendeeId)}" data-in="${escapeHtml(r.requestedCheckIn)}" data-out="${escapeHtml(r.requestedCheckOut)}">Book room</button>
-        </div>
-      </div>`,
-      )
+          <button class="btn book-btn" data-attendee="${escapeHtml(r.attendeeId)}">Book room</button>
+        </div>`
+        }
+      </div>`;
+      })
       .join("");
 
+    if (editingHotelAttendeeId) {
+      wireHotelAssignmentForm(`#haf-row-${editingHotelAttendeeId}`, loadRequests);
+    }
+
     document.querySelectorAll(".book-btn").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        const roomNumber = prompt("Room number?") ?? "";
-        const res = await api(`/attendees/${btn.dataset.attendee}/hotel-assignment`, {
-          method: "POST",
-          body: JSON.stringify({
-            checkInDate: btn.dataset.in,
-            checkOutDate: btn.dataset.out,
-            roomNumber,
-          }),
-        });
-        if (res.ok) {
-          showNotice("Room booked.", "success");
-          loadRequests();
-          loadRoster();
-          refreshNavBadges();
-        }
+      btn.addEventListener("click", () => {
+        editingHotelAttendeeId = btn.dataset.attendee;
+        loadRequests();
       });
     });
 
@@ -753,6 +832,42 @@
           loadRequests();
           refreshNavBadges();
         }
+      });
+    });
+  }
+
+  // ADR 0038 — every confirmed assignment, editable directly (not just via
+  // an open request) so an admin can nudge anyone's dates.
+  async function loadHotelAssignments() {
+    const res = await api(`/events/${eventId()}/hotel-assignments`);
+    if (!res.ok) return;
+    const rows = await res.json();
+    document.getElementById("hotel-assignments-body").innerHTML = rows.length === 0
+      ? `<tr><td colspan="5" class="hint">No confirmed assignments yet.</td></tr>`
+      : rows
+      .map((r) => {
+        const editing = editingHotelAttendeeId === r.attendeeId;
+        if (editing) {
+          return `<tr id="haf-row-${escapeHtml(r.attendeeId)}"><td colspan="5">${hotelAssignmentFormHtml(r.attendeeId, r.checkInDate, r.checkOutDate, r.roomNumber)}</td></tr>`;
+        }
+        return `<tr>
+          <td>${escapeHtml(r.firstName)} ${escapeHtml(r.lastName)}</td>
+          <td>${escapeHtml(r.roomNumber ?? "—")}</td>
+          <td>${escapeHtml(r.checkInDate ?? "—")}</td>
+          <td>${escapeHtml(r.checkOutDate ?? "—")}</td>
+          <td><button class="btn ghost edit-assignment-btn" data-attendee="${escapeHtml(r.attendeeId)}" style="padding:4px 8px; font-size:11px;">Edit</button></td>
+        </tr>`;
+      })
+      .join("");
+
+    if (editingHotelAttendeeId) {
+      wireHotelAssignmentForm(`#haf-row-${editingHotelAttendeeId}`, loadHotelAssignments);
+    }
+
+    document.querySelectorAll(".edit-assignment-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        editingHotelAttendeeId = btn.dataset.attendee;
+        loadHotelAssignments();
       });
     });
   }
@@ -956,7 +1071,7 @@
   });
 
   // ADR 0033 — populated by loadBranding, read by applyFlightVisibility.
-  let orgSettings = { flightTrackingEnabled: true, magicLinkTtlMinutes: 15 };
+  let orgSettings = { flightTrackingEnabled: true, magicLinkTtlMinutes: 15, notifyOnGuestHotelChangeEmail: false };
 
   function applyFlightVisibility() {
     document.querySelectorAll(".flight-feature").forEach((el) => {
@@ -983,9 +1098,11 @@
     orgSettings = {
       flightTrackingEnabled: org.flightTrackingEnabled ?? true,
       magicLinkTtlMinutes: org.magicLinkTtlMinutes ?? 15,
+      notifyOnGuestHotelChangeEmail: org.notifyOnGuestHotelChangeEmail ?? false,
     };
     document.getElementById("flight-tracking-enabled").checked = orgSettings.flightTrackingEnabled;
     document.getElementById("magic-link-ttl").value = orgSettings.magicLinkTtlMinutes;
+    document.getElementById("notify-guest-hotel-change-email").checked = orgSettings.notifyOnGuestHotelChangeEmail;
     applyFlightVisibility();
   }
 
@@ -993,6 +1110,7 @@
     const flightTrackingEnabled = document.getElementById("flight-tracking-enabled").checked;
     const magicLinkTtlMinutesRaw = document.getElementById("magic-link-ttl").value;
     const magicLinkTtlMinutes = parseInt(magicLinkTtlMinutesRaw, 10);
+    const notifyOnGuestHotelChangeEmail = document.getElementById("notify-guest-hotel-change-email").checked;
 
     if (!Number.isInteger(magicLinkTtlMinutes) || magicLinkTtlMinutes < 0) {
       return showNotice("Magic-link expiry must be 0 or a positive whole number of minutes.", "error");
@@ -1008,11 +1126,11 @@
 
     const res = await api("/organization/settings", {
       method: "PATCH",
-      body: JSON.stringify({ flightTrackingEnabled, magicLinkTtlMinutes }),
+      body: JSON.stringify({ flightTrackingEnabled, magicLinkTtlMinutes, notifyOnGuestHotelChangeEmail }),
     });
     if (res.ok) {
       showNotice("Feature settings saved.", "success");
-      orgSettings = { flightTrackingEnabled, magicLinkTtlMinutes };
+      orgSettings = { flightTrackingEnabled, magicLinkTtlMinutes, notifyOnGuestHotelChangeEmail };
       applyFlightVisibility();
     } else {
       const err = await res.json();
@@ -1234,6 +1352,178 @@
     navigator.clipboard.writeText(document.getElementById("registration-link").textContent);
     showNotice("Link copied.", "success");
   });
+
+  // ADR 0038 — freeze controls. "Publish"/"Un-publish" reads as the
+  // deliberate action it is (send-to-vendor moment) rather than a bare
+  // checkbox; contact-info config is editable independent of the
+  // frozen/unfrozen state so an admin can set it up ahead of time.
+  const FREEZE_LABELS = { hotel: "Hotel", meals: "Meal" };
+  let fieldFreezeCache = [];
+
+  function freezeRowHtml(fieldType, admins) {
+    const label = FREEZE_LABELS[fieldType];
+    const row = fieldFreezeCache.find((r) => r.fieldType === fieldType) ?? {
+      fieldType,
+      frozen: false,
+      contactMode: null,
+      contactAdminMembershipId: null,
+      contactText: null,
+    };
+    const adminOptions = admins
+      .map((a) => `<option value="${escapeHtml(a.id)}" ${a.id === row.contactAdminMembershipId ? "selected" : ""}>${escapeHtml(a.email)}</option>`)
+      .join("");
+
+    return `
+      <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px; flex-wrap:wrap;">
+        <strong style="min-width:50px;">${label}</strong>
+        ${
+          row.frozen
+            ? `<span class="badge" style="background:var(--warning-soft); color:var(--warning);">Published — guests can't submit changes</span>
+               <button class="btn ghost unpublish-freeze-btn" data-field="${fieldType}" style="padding:4px 8px; font-size:11px;">Un-publish (allow changes again)</button>`
+            : `<button class="btn publish-freeze-btn" data-field="${fieldType}" style="padding:4px 8px; font-size:11px;">Publish final ${label.toLowerCase()} list</button>`
+        }
+      </div>
+      <div style="display:flex; align-items:flex-end; gap:10px; flex-wrap:wrap;">
+        <div class="field">
+          <label>Contact when frozen</label>
+          <select class="freeze-contact-mode" data-field="${fieldType}">
+            <option value="" ${!row.contactMode ? "selected" : ""}>Generic message</option>
+            <option value="admin" ${row.contactMode === "admin" ? "selected" : ""}>Specific admin</option>
+            <option value="text" ${row.contactMode === "text" ? "selected" : ""}>Free-form text</option>
+          </select>
+        </div>
+        <div class="field freeze-contact-admin-field" data-field="${fieldType}" style="display:${row.contactMode === "admin" ? "" : "none"};">
+          <label>Admin</label>
+          <select class="freeze-contact-admin">${adminOptions}</select>
+        </div>
+        <div class="field freeze-contact-text-field" data-field="${fieldType}" style="display:${row.contactMode === "text" ? "" : "none"}; flex:1; min-width:220px;">
+          <label>Message</label>
+          <input class="freeze-contact-text" value="${escapeHtml(row.contactText ?? "")}" placeholder="e.g. email jane@company.com" />
+        </div>
+        <button class="btn ghost save-freeze-contact-btn" data-field="${fieldType}" style="padding:4px 10px; font-size:11px;">Save contact info</button>
+      </div>`;
+  }
+
+  function wireFreezeRow(fieldType) {
+    const container = document.getElementById(`freeze-${fieldType}-row`);
+    if (!container) return;
+
+    container.querySelectorAll(".freeze-contact-mode").forEach((sel) => {
+      sel.addEventListener("change", () => {
+        const adminField = container.querySelector(".freeze-contact-admin-field");
+        const textField = container.querySelector(".freeze-contact-text-field");
+        adminField.style.display = sel.value === "admin" ? "" : "none";
+        textField.style.display = sel.value === "text" ? "" : "none";
+      });
+    });
+
+    container.querySelectorAll(".publish-freeze-btn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const label = FREEZE_LABELS[btn.dataset.field];
+        if (
+          !confirm(
+            `Publish the final ${label.toLowerCase()} list? Guests will no longer be able to submit ${label.toLowerCase()} changes. You can un-publish later if needed.`,
+          )
+        )
+          return;
+        const row = fieldFreezeCache.find((r) => r.fieldType === btn.dataset.field);
+        const res = await api(`/events/${eventId()}/field-freeze/${btn.dataset.field}`, {
+          method: "PATCH",
+          body: JSON.stringify({
+            frozen: true,
+            contactMode: row?.contactMode ?? null,
+            contactAdminMembershipId: row?.contactAdminMembershipId ?? null,
+            contactText: row?.contactText ?? null,
+          }),
+        });
+        if (res.ok) {
+          showNotice(`${label} list published.`, "success");
+          loadFieldFreeze();
+        } else {
+          const err = await res.json();
+          showNotice(err.error ?? "Could not publish.", "error");
+        }
+      });
+    });
+
+    container.querySelectorAll(".unpublish-freeze-btn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const row = fieldFreezeCache.find((r) => r.fieldType === btn.dataset.field);
+        const res = await api(`/events/${eventId()}/field-freeze/${btn.dataset.field}`, {
+          method: "PATCH",
+          body: JSON.stringify({
+            frozen: false,
+            contactMode: row?.contactMode ?? null,
+            contactAdminMembershipId: row?.contactAdminMembershipId ?? null,
+            contactText: row?.contactText ?? null,
+          }),
+        });
+        if (res.ok) {
+          showNotice("Un-published — guests can submit changes again.", "success");
+          loadFieldFreeze();
+        }
+      });
+    });
+
+    container.querySelectorAll(".save-freeze-contact-btn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const fieldType = btn.dataset.field;
+        const row = fieldFreezeCache.find((r) => r.fieldType === fieldType);
+        const mode = container.querySelector(".freeze-contact-mode").value || null;
+        const adminId = container.querySelector(".freeze-contact-admin")?.value ?? null;
+        const text = container.querySelector(".freeze-contact-text")?.value ?? null;
+        const res = await api(`/events/${eventId()}/field-freeze/${fieldType}`, {
+          method: "PATCH",
+          body: JSON.stringify({
+            frozen: row?.frozen ?? false,
+            contactMode: mode,
+            contactAdminMembershipId: mode === "admin" ? adminId : null,
+            contactText: mode === "text" ? text : null,
+          }),
+        });
+        if (res.ok) {
+          showNotice("Contact info saved.", "success");
+          loadFieldFreeze();
+        } else {
+          const err = await res.json();
+          showNotice(err.error ?? "Could not save contact info.", "error");
+        }
+      });
+    });
+  }
+
+  async function loadFieldFreeze() {
+    const [freezeRes, adminsRes] = await Promise.all([api(`/events/${eventId()}/field-freeze`), api("/admins")]);
+    if (!freezeRes.ok) return;
+    fieldFreezeCache = await freezeRes.json();
+    const admins = adminsRes.ok ? await adminsRes.json() : [];
+    for (const fieldType of Object.keys(FREEZE_LABELS)) {
+      document.getElementById(`freeze-${fieldType}-row`).innerHTML = freezeRowHtml(fieldType, admins);
+      wireFreezeRow(fieldType);
+    }
+  }
+
+  // Small "this is frozen" banner for pages other than Event settings, so
+  // it's obvious without navigating there first.
+  async function loadFreezeBanner(fieldType, bannerElId) {
+    const el = document.getElementById(bannerElId);
+    if (!el) return;
+    const res = await api(`/events/${eventId()}/field-freeze`);
+    if (!res.ok) return;
+    const rows = await res.json();
+    const row = rows.find((r) => r.fieldType === fieldType);
+    const label = FREEZE_LABELS[fieldType];
+    el.innerHTML = row?.frozen
+      ? `<div class="notice warn">❄️ ${label} changes are published — guests can no longer submit changes. <a href="#" class="goto-freeze-settings" style="color:inherit;">Manage in Event settings</a></div>`
+      : "";
+    const link = el.querySelector(".goto-freeze-settings");
+    if (link) {
+      link.addEventListener("click", (e) => {
+        e.preventDefault();
+        showPage("event-settings");
+      });
+    }
+  }
 
   document.getElementById("add-attendee").addEventListener("click", async () => {
     const fields = {
@@ -1607,6 +1897,7 @@
 
   function loadPageData(page) {
     if (!eventId() && page !== "events" && page !== "organization") return;
+    editingHotelAttendeeId = null; // don't leave a stale inline edit form open across page/event switches
     if (page === "overview") {
       loadOverviewActivity().then(computeOverviewStats);
       loadOverviewUnclaimedAdmins();
@@ -1620,11 +1911,15 @@
       loadSubEvents();
     } else if (page === "hotel") {
       loadHotelExportLabels();
+      loadHotelAssignments();
+      loadFreezeBanner("hotel", "hotel-frozen-banner");
     } else if (page === "dietary") {
       loadDietaryReport();
+      loadFreezeBanner("meals", "meals-frozen-banner");
     } else if (page === "event-settings") {
       loadEventDetails();
       loadRegistrationSettings();
+      loadFieldFreeze();
     } else if (page === "events") {
       loadEventList();
     } else if (page === "organization") {

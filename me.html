@@ -18,6 +18,7 @@
 
   <div class="card">
     <h2>Dietary preference</h2>
+    <div id="dietary-freeze-banner"></div>
     <p class="hint">Applies immediately — no review needed.</p>
     <div class="field-row">
       <div class="field">
@@ -130,24 +131,27 @@
     return res;
   }
 
+  // ADR 0038 — hotel dates are now editable even after a room is
+  // confirmed (the guest submits a change request the same way as before
+  // booking; nothing overwrites the confirmed assignment until an admin
+  // acts on it), unless the organizer has frozen hotel changes, in which
+  // case no form is shown at all and the guest is told who to contact.
   function renderHotel(attendee) {
     const el = document.getElementById("hotel-section");
     const hotel = attendee.hotel;
+    const freeze = attendee.freeze?.hotel;
 
-    if (hotel.status === "confirmed") {
-      el.innerHTML = `
-        <div class="field-row">
-          <div class="field">
-            <label>Room</label>
-            <div class="readonly-field">${escapeHtml(hotel.roomNumber ?? "—")}</div>
+    if (freeze?.frozen) {
+      el.innerHTML = `<div class="notice warn">❄️ ${escapeHtml(freeze.message)}</div>`;
+      if (hotel.status === "confirmed") {
+        el.innerHTML += `
+          <div class="field-row">
+            <div class="field"><label>Room</label><div class="readonly-field">${escapeHtml(hotel.roomNumber ?? "—")}</div></div>
+            <div class="field"><label>Confirmation code</label><div class="readonly-field">${escapeHtml(hotel.confirmationNumber ?? "Pending")}</div></div>
           </div>
-          <div class="field">
-            <label>Confirmation code</label>
-            <div class="readonly-field">${escapeHtml(hotel.confirmationNumber ?? "Pending")}</div>
-          </div>
-        </div>
-        <p class="hint">Check-in ${escapeHtml(hotel.checkInDate)} → Check-out ${escapeHtml(hotel.checkOutDate)}</p>
-      `;
+          <p class="hint">Check-in ${escapeHtml(hotel.checkInDate)} → Check-out ${escapeHtml(hotel.checkOutDate)}</p>
+        `;
+      }
       return;
     }
 
@@ -155,8 +159,20 @@
     const eventDatesHint = eventDates
       ? ` The event runs ${escapeHtml(eventDates.startDate)} – ${escapeHtml(eventDates.endDate)}.`
       : "";
+
+    const confirmedSummary =
+      hotel.status === "confirmed"
+        ? `
+      <div class="field-row">
+        <div class="field"><label>Room</label><div class="readonly-field">${escapeHtml(hotel.roomNumber ?? "—")}</div></div>
+        <div class="field"><label>Confirmation code</label><div class="readonly-field">${escapeHtml(hotel.confirmationNumber ?? "Pending")}</div></div>
+      </div>
+      <p class="hint">Check-in ${escapeHtml(hotel.checkInDate)} → Check-out ${escapeHtml(hotel.checkOutDate)}. Need something different? Submit a change request below.</p>
+    `
+        : `<p class="hint">We haven't booked your room yet — tell us your dates and we'll confirm a room and code here.${eventDatesHint}</p>`;
+
     el.innerHTML = `
-      <p class="hint">We haven't booked your room yet — tell us your dates and we'll confirm a room and code here.${eventDatesHint}</p>
+      ${confirmedSummary}
       ${alreadyRequested ? `<div class="notice warn">Request submitted: ${escapeHtml(hotel.openRequests[0].requestedCheckIn)} → ${escapeHtml(hotel.openRequests[0].requestedCheckOut)}. Awaiting booking.</div>` : ""}
       <div class="field-row">
         <div class="field"><label for="checkin">Preferred check-in</label><input id="checkin" type="date" /></div>
@@ -166,7 +182,7 @@
         <label for="hotel-note">Anything we should know?</label>
         <input id="hotel-note" placeholder="Arriving early, need a pet-friendly room, etc." />
       </div>
-      <button class="btn" id="submit-hotel-request">${alreadyRequested ? "Update request" : "Submit availability"}</button>
+      <button class="btn" id="submit-hotel-request">${alreadyRequested ? "Update request" : hotel.status === "confirmed" ? "Request a change" : "Submit availability"}</button>
     `;
 
     document.getElementById("submit-hotel-request").addEventListener("click", async () => {
@@ -277,6 +293,30 @@
     });
   }
 
+  // ADR 0038 — same disable/relabel pattern renderFlight already uses for
+  // its "pending review" state: banner shown, form disabled but still
+  // visible (the guest can still see their current selection), not hidden.
+  function renderDietaryFreeze(freeze) {
+    const banner = document.getElementById("dietary-freeze-banner");
+    const preference = document.getElementById("preference");
+    const allergyDetail = document.getElementById("allergyDetail");
+    const saveBtn = document.getElementById("save-dietary");
+
+    if (freeze?.frozen) {
+      banner.innerHTML = `<div class="notice warn">❄️ ${escapeHtml(freeze.message)}</div>`;
+      preference.disabled = true;
+      allergyDetail.disabled = true;
+      saveBtn.disabled = true;
+      saveBtn.textContent = "Changes closed";
+    } else {
+      banner.innerHTML = "";
+      preference.disabled = false;
+      allergyDetail.disabled = false;
+      saveBtn.disabled = false;
+      saveBtn.textContent = "Save";
+    }
+  }
+
   async function loadMe() {
     const res = await api("/me");
     const attendee = await res.json();
@@ -285,6 +325,7 @@
     document.getElementById("attendee-name").textContent = `${attendee.firstName} ${attendee.lastName}`;
     document.getElementById("preference").value = attendee.dietary?.preference ?? "";
     document.getElementById("allergyDetail").value = attendee.dietary?.allergyDetail ?? "";
+    renderDietaryFreeze(attendee.freeze?.meals);
     renderHotel(attendee);
     renderFlight(attendee);
     loadSubEvents();
