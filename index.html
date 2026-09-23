@@ -70,8 +70,16 @@
 <script>
   const notice = document.getElementById("notice");
 
+  // ADR 0040 follow-up (2026-09-23, caught live by user testing): `notice`
+  // sits at the very top of the page, but the registration form is now
+  // much taller with custom questions added — a result rendered here could
+  // sit off-screen below the fold (worse on mobile with the keyboard still
+  // open from the last field), making a successful submission look like
+  // nothing happened. Scroll it into view on every update so the result is
+  // never silently invisible.
   function showNotice(text, kind) {
     notice.innerHTML = `<div class="notice ${kind}">${text}</div>`;
+    notice.scrollIntoView({ behavior: "smooth", block: "center" });
   }
 
   // ADR 0009 — applies an org's branding (if any) via the CSS custom
