@@ -57,6 +57,7 @@
       <label for="reg-company">Company (optional)</label>
       <input id="reg-company" />
     </div>
+    <div id="reg-custom-questions"></div>
     <button class="btn" id="register-btn" style="width:100%;">Register</button>
   </div>
 
@@ -166,6 +167,70 @@
     }
   }
 
+  // ADR 0040 — org-authored custom registration questions. Rendered from
+  // the event's own `questions` array (GET /events/:eventId/public)
+  // instead of the fixed markup this form used to have; a question with a
+  // `visibleIf` rule starts hidden and only appears once the controlling
+  // question's answer matches, mirroring the server's own re-check in
+  // POST /register so nothing required-but-hidden can block submission.
+  let registrationQuestions = [];
+
+  function questionFieldId(questionId) {
+    return `reg-q-${questionId}`;
+  }
+
+  function renderCustomQuestions(questions) {
+    registrationQuestions = questions;
+    const container = document.getElementById("reg-custom-questions");
+    container.innerHTML = questions
+      .map((q) => {
+        const fieldId = questionFieldId(q.id);
+        const input =
+          q.fieldType === "select"
+            ? `<select id="${fieldId}"><option value="">Select…</option>${q.options
+                .map((o) => `<option value="${escapeHtml(o)}">${escapeHtml(o)}</option>`)
+                .join("")}</select>`
+            : `<input id="${fieldId}" />`;
+        return `<div class="field" id="${fieldId}-wrap" data-question-id="${escapeHtml(q.id)}" style="${q.visibleIf ? "display:none;" : ""}">
+          <label for="${fieldId}">${escapeHtml(q.label)}${q.required ? "" : " (optional)"}</label>
+          ${input}
+        </div>`;
+      })
+      .join("");
+
+    // Wire visibility: whenever a select this event's questions depend on
+    // changes, show/hide dependents and clear their value while hidden so
+    // a stale answer from a previously-visible state can't sneak into the
+    // submission.
+    for (const controller of questions.filter((q) => q.fieldType === "select")) {
+      const dependents = questions.filter((q) => q.visibleIf?.questionId === controller.id);
+      if (dependents.length === 0) continue;
+      document.getElementById(questionFieldId(controller.id)).addEventListener("change", (e) => {
+        for (const dep of dependents) {
+          const wrap = document.getElementById(`${questionFieldId(dep.id)}-wrap`);
+          const visible = e.target.value === dep.visibleIf.value;
+          wrap.style.display = visible ? "" : "none";
+          if (!visible) document.getElementById(questionFieldId(dep.id)).value = "";
+        }
+      });
+    }
+  }
+
+  function collectQuestionAnswers() {
+    const answers = [];
+    for (const q of registrationQuestions) {
+      const wrap = document.getElementById(`${questionFieldId(q.id)}-wrap`);
+      if (wrap.style.display === "none") continue; // hidden by an unmet visibleIf
+      const value = document.getElementById(questionFieldId(q.id)).value.trim();
+      if (!value) {
+        if (q.required) throw new Error(`"${q.label}" is required.`);
+        continue;
+      }
+      answers.push({ questionId: q.id, value });
+    }
+    return answers;
+  }
+
   async function submitRegistration(eventId) {
     const firstName = document.getElementById("reg-first").value.trim();
     const lastName = document.getElementById("reg-last").value.trim();
@@ -174,6 +239,13 @@
 
     if (!firstName || !lastName || !email) {
       return showNotice("First name, last name, and email are required.", "error");
+    }
+
+    let answers;
+    try {
+      answers = collectQuestionAnswers();
+    } catch (err) {
+      return showNotice(err.message, "error");
     }
 
     const btn = document.getElementById("register-btn");
@@ -187,9 +259,13 @@
       const res = await fetch(`${API_BASE_URL}/register`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ eventId, firstName, lastName, email, companyName }),
+        body: JSON.stringify({ eventId, firstName, lastName, email, companyName, answers }),
       });
       const data = await res.json();
+      if (!res.ok) {
+        showNotice(data.error ?? "Something went wrong. Try again.", "error");
+        return;
+      }
       showDevLinkOrSuccess(data, "Check your email — we've sent you a sign-in link.");
     } catch (err) {
       showNotice("Something went wrong. Try again.", "error");
@@ -219,6 +295,7 @@
 
       if (event.allowSelfRegistration) {
         document.getElementById("register-card").style.display = "";
+        renderCustomQuestions(event.questions ?? []);
         document.getElementById("register-btn").addEventListener("click", () =>
           submitRegistration(eventId),
         );

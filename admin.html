@@ -377,6 +377,50 @@
           <div id="freeze-hotel-row" class="freeze-row"></div>
           <div id="freeze-meals-row" class="freeze-row" style="margin-top: 14px;"></div>
         </div>
+
+        <!-- ADR 0040 — org-authored custom registration questions/dropdowns
+             for this event's public registration form. Gated server-side
+             on owner/admin or canManageQuestions; not hidden client-side
+             (matches this app's existing pattern — see Approval routing
+             and Feature settings above, which the server 403s for editors
+             instead of hiding). -->
+        <div class="panel">
+          <div class="panel-head"><h2>Registration questions</h2></div>
+          <p class="hint" style="padding: 0 15px;">Extra questions asked on this event's public registration form, beyond name/email/company. A question can be shown only when another question was answered a specific way (e.g. "Location" only for registrants who picked "M&amp;K" for Company).</p>
+          <table class="roster" style="margin-bottom: 0;">
+            <thead><tr><th>Label</th><th>Type</th><th>Required</th><th>Options</th><th>Shown when</th><th></th></tr></thead>
+            <tbody id="questions-body"></tbody>
+          </table>
+
+          <div style="padding: 12px 15px 15px; border-top: 1px solid var(--border);">
+            <div class="field-row">
+              <div class="field"><label for="q-label">Question label</label><input id="q-label" /></div>
+              <div class="field">
+                <label for="q-type">Type</label>
+                <select id="q-type"><option value="text">Text</option><option value="select">Dropdown</option></select>
+              </div>
+            </div>
+            <div class="field" id="q-options-wrap">
+              <label for="q-options">Options (one per line)</label>
+              <textarea id="q-options" rows="3"></textarea>
+            </div>
+            <div class="field-row">
+              <div class="field">
+                <label for="q-visible-if-question">Show only if</label>
+                <select id="q-visible-if-question"><option value="">Always shown</option></select>
+              </div>
+              <div class="field">
+                <label for="q-visible-if-value">Equals</label>
+                <select id="q-visible-if-value" disabled><option value="">—</option></select>
+              </div>
+            </div>
+            <label style="font-size: 12.5px; display:block; margin-bottom: 10px;">
+              <input type="checkbox" id="q-required" /> Required (when shown)
+            </label>
+            <button class="btn ghost" id="save-question-btn">Add question</button>
+            <button class="btn ghost" id="cancel-edit-question-btn" style="display:none;">Cancel edit</button>
+          </div>
+        </div>
       </div>
 
       <!-- ============================== Organization ============================== -->
@@ -430,7 +474,7 @@
         <div class="panel">
           <div class="panel-head"><h2>Admins</h2></div>
           <table class="roster" style="margin-bottom: 0;">
-            <thead><tr><th>Email</th><th>Role</th><th>Last signed in</th><th></th></tr></thead>
+            <thead><tr><th>Email</th><th>Role</th><th>Last signed in</th><th>Can manage questions</th><th></th></tr></thead>
             <tbody id="admins-body"></tbody>
           </table>
           <div class="field-row" style="padding: 12px 15px 0;">
@@ -1226,7 +1270,7 @@
     if (!res.ok) return;
     const rows = await res.json();
     document.getElementById("admins-body").innerHTML = rows.length === 0
-      ? `<tr><td colspan="4" class="hint">No admins listed.</td></tr>`
+      ? `<tr><td colspan="5" class="hint">No admins listed.</td></tr>`
       : rows
       .map((a) => {
         const claimed = !!a.lastSignInAt;
@@ -1234,6 +1278,9 @@
           <td>${escapeHtml(a.email)}</td>
           <td><span class="badge">${escapeHtml(a.role)}</span></td>
           <td>${claimed ? `<span class="dot ok"></span>${new Date(a.lastSignInAt).toLocaleDateString()}` : '<span class="dot wait"></span>Not yet claimed'}</td>
+          <td>
+            <input type="checkbox" class="can-manage-questions-toggle" data-id="${escapeHtml(a.id)}" ${a.canManageQuestions ? "checked" : ""} ${a.role === "owner" ? "disabled title=\"Owners already have full access\"" : ""} />
+          </td>
           <td>
             ${!claimed ? `<button class="btn ghost resend-admin-btn" data-id="${escapeHtml(a.id)}" style="padding:4px 8px; font-size:11px;">Resend</button>` : ""}
             <button class="btn ghost rescind-admin-btn" data-id="${escapeHtml(a.id)}" data-email="${escapeHtml(a.email)}" style="padding:4px 8px; font-size:11px; color:var(--accent);">${claimed ? "Revoke" : "Rescind"}</button>
@@ -1243,6 +1290,22 @@
       .join("");
 
     wireAdminInviteActions("#admins-body");
+
+    document.querySelectorAll("#admins-body .can-manage-questions-toggle").forEach((box) => {
+      box.addEventListener("change", async (e) => {
+        const res = await api(`/admins/${box.dataset.id}/capabilities`, {
+          method: "PATCH",
+          body: JSON.stringify({ canManageQuestions: e.target.checked }),
+        });
+        if (res.ok) {
+          showNotice("Saved.", "success");
+        } else {
+          const err = await res.json();
+          showNotice(err.error ?? "Could not save.", "error");
+          e.target.checked = !e.target.checked;
+        }
+      });
+    });
   }
 
   async function loadOverviewUnclaimedAdmins() {
@@ -1504,6 +1567,173 @@
       wireFreezeRow(fieldType);
     }
   }
+
+  // ============================== Registration questions (ADR 0040) ==============================
+  let questionsCache = [];
+  let editingQuestionId = null;
+
+  function updateQuestionOptionsVisibility() {
+    document.getElementById("q-options-wrap").style.display =
+      document.getElementById("q-type").value === "select" ? "" : "none";
+  }
+  document.getElementById("q-type").addEventListener("change", updateQuestionOptionsVisibility);
+
+  function populateVisibleIfControllerOptions(excludeId) {
+    const select = document.getElementById("q-visible-if-question");
+    const selectQuestions = questionsCache.filter((q) => q.fieldType === "select" && q.id !== excludeId);
+    select.innerHTML =
+      `<option value="">Always shown</option>` +
+      selectQuestions.map((q) => `<option value="${escapeHtml(q.id)}">${escapeHtml(q.label)}</option>`).join("");
+  }
+
+  function populateVisibleIfValueOptions(controllerId, selectedValue) {
+    const valueSelect = document.getElementById("q-visible-if-value");
+    const controller = questionsCache.find((q) => q.id === controllerId);
+    if (!controller) {
+      valueSelect.innerHTML = `<option value="">—</option>`;
+      valueSelect.disabled = true;
+      return;
+    }
+    valueSelect.disabled = false;
+    valueSelect.innerHTML = controller.options
+      .map((o) => `<option value="${escapeHtml(o)}" ${o === selectedValue ? "selected" : ""}>${escapeHtml(o)}</option>`)
+      .join("");
+  }
+
+  document.getElementById("q-visible-if-question").addEventListener("change", (e) => {
+    populateVisibleIfValueOptions(e.target.value, null);
+  });
+
+  function resetQuestionForm() {
+    editingQuestionId = null;
+    document.getElementById("q-label").value = "";
+    document.getElementById("q-type").value = "text";
+    document.getElementById("q-options").value = "";
+    document.getElementById("q-required").checked = false;
+    updateQuestionOptionsVisibility();
+    populateVisibleIfControllerOptions(null);
+    document.getElementById("q-visible-if-question").value = "";
+    populateVisibleIfValueOptions(null, null);
+    document.getElementById("save-question-btn").textContent = "Add question";
+    document.getElementById("cancel-edit-question-btn").style.display = "none";
+  }
+  document.getElementById("cancel-edit-question-btn").addEventListener("click", resetQuestionForm);
+
+  function startEditQuestion(id) {
+    const q = questionsCache.find((qq) => qq.id === id);
+    if (!q) return;
+    editingQuestionId = id;
+    document.getElementById("q-label").value = q.label;
+    document.getElementById("q-type").value = q.fieldType;
+    document.getElementById("q-options").value = q.options.join("\n");
+    document.getElementById("q-required").checked = q.required;
+    updateQuestionOptionsVisibility();
+    populateVisibleIfControllerOptions(id); // a question can't depend on its own answer
+    document.getElementById("q-visible-if-question").value = q.visibleIf?.questionId ?? "";
+    populateVisibleIfValueOptions(q.visibleIf?.questionId ?? null, q.visibleIf?.value ?? null);
+    document.getElementById("save-question-btn").textContent = "Save changes";
+    document.getElementById("cancel-edit-question-btn").style.display = "";
+  }
+
+  async function deleteQuestion(id) {
+    if (
+      !confirm(
+        'Delete this question? Any "show only if" rule on another question that points at it will be cleared, not deleted.',
+      )
+    )
+      return;
+    const res = await api(`/questions/${id}`, { method: "DELETE" });
+    if (res.ok) {
+      showNotice("Question deleted.", "success");
+      if (editingQuestionId === id) resetQuestionForm();
+      loadRegistrationQuestions();
+    } else {
+      const err = await res.json();
+      showNotice(err.error ?? "Could not delete question.", "error");
+    }
+  }
+
+  function renderQuestions() {
+    document.getElementById("questions-body").innerHTML =
+      questionsCache.length === 0
+        ? `<tr><td colspan="6" class="hint">No custom questions yet.</td></tr>`
+        : questionsCache
+            .map((q) => {
+              let shownWhen = "Always";
+              if (q.visibleIf) {
+                const controller = questionsCache.find((c) => c.id === q.visibleIf.questionId);
+                shownWhen = controller
+                  ? `${escapeHtml(controller.label)} = ${escapeHtml(q.visibleIf.value)}`
+                  : "—";
+              }
+              return `<tr>
+                <td>${escapeHtml(q.label)}</td>
+                <td>${q.fieldType === "select" ? "Dropdown" : "Text"}</td>
+                <td>${q.required ? "Yes" : "No"}</td>
+                <td>${q.fieldType === "select" ? escapeHtml(q.options.join(", ")) : "—"}</td>
+                <td>${shownWhen}</td>
+                <td>
+                  <button class="btn ghost edit-question-btn" data-id="${escapeHtml(q.id)}" style="padding:4px 8px; font-size:11px;">Edit</button>
+                  <button class="btn ghost delete-question-btn" data-id="${escapeHtml(q.id)}" style="padding:4px 8px; font-size:11px; color:var(--accent);">Delete</button>
+                </td>
+              </tr>`;
+            })
+            .join("");
+
+    document.querySelectorAll(".edit-question-btn").forEach((btn) => {
+      btn.addEventListener("click", () => startEditQuestion(btn.dataset.id));
+    });
+    document.querySelectorAll(".delete-question-btn").forEach((btn) => {
+      btn.addEventListener("click", () => deleteQuestion(btn.dataset.id));
+    });
+  }
+
+  async function loadRegistrationQuestions() {
+    const res = await api(`/events/${eventId()}/questions`);
+    if (!res.ok) return;
+    questionsCache = await res.json();
+    renderQuestions();
+    populateVisibleIfControllerOptions(editingQuestionId);
+  }
+
+  document.getElementById("save-question-btn").addEventListener("click", async () => {
+    const label = document.getElementById("q-label").value.trim();
+    const fieldType = document.getElementById("q-type").value;
+    const required = document.getElementById("q-required").checked;
+    const options = document
+      .getElementById("q-options")
+      .value.split("\n")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const visibleIfQuestionId = document.getElementById("q-visible-if-question").value;
+    const visibleIfValue = document.getElementById("q-visible-if-value").value;
+
+    if (!label) return showNotice("Question label is required.", "error");
+    if (fieldType === "select" && options.length === 0) {
+      return showNotice("Add at least one option for a dropdown question.", "error");
+    }
+
+    const body = {
+      label,
+      fieldType,
+      required,
+      ...(fieldType === "select" ? { options } : {}),
+      visibleIf: visibleIfQuestionId ? { questionId: visibleIfQuestionId, value: visibleIfValue } : null,
+    };
+
+    const res = editingQuestionId
+      ? await api(`/questions/${editingQuestionId}`, { method: "PATCH", body: JSON.stringify(body) })
+      : await api(`/events/${eventId()}/questions`, { method: "POST", body: JSON.stringify(body) });
+
+    if (res.ok) {
+      showNotice(editingQuestionId ? "Question updated." : "Question added.", "success");
+      resetQuestionForm();
+      loadRegistrationQuestions();
+    } else {
+      const err = await res.json();
+      showNotice(err.error ?? "Could not save question.", "error");
+    }
+  });
 
   // Small "this is frozen" banner for pages other than Event settings, so
   // it's obvious without navigating there first.
@@ -1922,6 +2152,7 @@
       loadEventDetails();
       loadRegistrationSettings();
       loadFieldFreeze();
+      loadRegistrationQuestions();
     } else if (page === "events") {
       loadEventList();
     } else if (page === "organization") {
