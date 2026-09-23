@@ -53,7 +53,7 @@
       <label for="reg-email">Email</label>
       <input id="reg-email" type="email" placeholder="you@example.com" autocomplete="email" />
     </div>
-    <div class="field">
+    <div class="field" id="reg-company-wrap">
       <label for="reg-company">Company (optional)</label>
       <input id="reg-company" />
     </div>
@@ -181,6 +181,18 @@
 
   function renderCustomQuestions(questions) {
     registrationQuestions = questions;
+
+    // ADR 0040 follow-up (2026-09-23, caught live testing): the legacy
+    // free-text "Company (optional)" field predates org-authored custom
+    // questions and has nothing to do with them — but an org that adds its
+    // own "Company" question (M&K's case) ends up with two fields both
+    // labeled "Company" on the same form, which is genuinely confusing,
+    // not just redundant. Hide the legacy one whenever a custom question
+    // uses that exact label, rather than adding a new per-event
+    // "hide the legacy field" setting for a problem this narrow.
+    const hasCustomCompanyQuestion = questions.some((q) => q.label.trim().toLowerCase() === "company");
+    document.getElementById("reg-company-wrap").style.display = hasCustomCompanyQuestion ? "none" : "";
+
     const container = document.getElementById("reg-custom-questions");
     container.innerHTML = questions
       .map((q) => {
