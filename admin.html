@@ -222,7 +222,14 @@
         </div>
 
         <div class="panel">
-          <div class="panel-head"><h2>Roster</h2><span class="count-pill" id="roster-count-pill">0</span></div>
+          <div class="panel-head">
+            <div><h2 style="display:inline;">Roster</h2> <span class="count-pill" id="roster-count-pill">0</span></div>
+            <!-- ADR 0040 Phase 2 — includes every registration-question answer as its
+                 own column (Cell #, Company, Location, Department, etc.), not just
+                 name/email/affiliation, so an org can sort/filter on those in a
+                 spreadsheet after export. -->
+            <button class="btn ghost" id="roster-export-csv" style="padding: 4px 10px; font-size: 12px;">Export roster CSV</button>
+          </div>
           <table class="roster" style="margin-top: 0;">
             <thead><tr><th>Name</th><th>Affiliation</th><th>Source</th><th>Billing</th><th class="flight-feature">Flight</th><th>Note</th><th></th></tr></thead>
             <tbody id="roster-body"></tbody>
@@ -920,6 +927,20 @@
 
   let rosterCache = [];
   let editingAttendeeId = null;
+
+  // ADR 0040 Phase 2 — same download-a-generated-blob pattern as the hotel
+  // export button above.
+  document.getElementById("roster-export-csv").addEventListener("click", async () => {
+    const res = await api(`/events/${eventId()}/roster-export.csv`);
+    if (!res.ok) return showNotice("Export failed.", "error");
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `roster_export_${eventId()}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  });
 
   async function loadRoster() {
     const res = await api(`/events/${eventId()}/attendees`);
