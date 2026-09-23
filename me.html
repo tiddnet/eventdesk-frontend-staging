@@ -257,7 +257,10 @@
   // (self-signup, admin bulk-enroll, or auto-enroll) — the DELETE route
   // doesn't distinguish source, so "Leave" works the same for all three.
   async function loadSubEvents() {
-    const res = await api("/sub-events");
+    // ADR 0042 — missing "/me" prefix here 404'd silently since this
+    // whole card's introduction (ADR 0010); every other api() call in
+    // this file includes it.
+    const res = await api("/me/sub-events");
     if (!res.ok) return;
     const subEvents = await res.json();
     const card = document.getElementById("sub-events-card");
@@ -285,7 +288,7 @@
     document.querySelectorAll(".sub-event-toggle-btn").forEach((btn) => {
       btn.addEventListener("click", async () => {
         const signedUp = btn.dataset.signedUp === "true";
-        const res = await api(`/sub-events/${btn.dataset.id}/signup`, {
+        const res = await api(`/me/sub-events/${btn.dataset.id}/signup`, {
           method: signedUp ? "DELETE" : "POST",
         });
         if (res.ok) loadSubEvents();
