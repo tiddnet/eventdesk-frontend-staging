@@ -743,15 +743,32 @@
     });
   }
 
+  // ADR 0041 — every attendeeChanges write site is supposed to
+  // JSON.stringify an object into newValue (two didn't, until this ADR's
+  // fix), and this renders every row unconditionally regardless of
+  // fieldType/status, unlike loadChanges's pending-only card. A bad or
+  // legacy non-object value degrades to showing the raw string instead of
+  // throwing and blanking the whole panel (a single bad row used to take
+  // the entire "Recent activity" view down with it).
+  function summarizeChangeValue(raw) {
+    let val;
+    try {
+      val = JSON.parse(raw);
+    } catch {
+      return escapeHtml(raw);
+    }
+    if (typeof val !== "object" || val === null) return escapeHtml(String(val));
+    return Object.entries(val)
+      .map(([k, v]) => `${escapeHtml(k)}: ${escapeHtml(v) || "—"}`)
+      .join(", ");
+  }
+
   function renderActivityRows(targetId, rows) {
     document.getElementById(targetId).innerHTML = rows.length === 0
       ? `<tr><td colspan="${targetId === "activity-feed-body" ? 5 : 4}" class="hint">Nothing yet.</td></tr>`
       : rows
       .map((r) => {
-        const val = JSON.parse(r.newValue);
-        const summary = Object.entries(val)
-          .map(([k, v]) => `${escapeHtml(k)}: ${escapeHtml(v) || "—"}`)
-          .join(", ");
+        const summary = summarizeChangeValue(r.newValue);
         const byLabel = r.changedByRole === "admin" ? "Admin" : r.status === "approved" ? "Guest (approved)" : "Guest";
         const fieldCell = targetId === "activity-feed-body" ? `<td>${escapeHtml(r.fieldType)}</td>` : "";
         return `
