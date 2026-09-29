@@ -155,10 +155,38 @@
       return;
     }
 
-    const alreadyRequested = hotel.openRequests.length > 0;
+    // `hotel.openRequests` is misleadingly named — it's every request this
+    // guest has ever submitted (open, booked, and dismissed alike; see
+    // guestSafe.ts), in insertion order, oldest first. Every read of it
+    // has to filter to status "open" and pick the most recent one, never
+    // just openRequests[0] — that was the pre-existing bug this surfaced
+    // (a resolved request from months ago could outrank a guest's actual
+    // current pending one just by having been inserted first).
+    const openOnly = (hotel.openRequests ?? []).filter((r) => r.status === "open");
+    const latestOpenRequest = openOnly.length
+      ? openOnly.reduce((latest, r) => (r.submittedAt > latest.submittedAt ? r : latest))
+      : null;
+    const alreadyRequested = !!latestOpenRequest;
     const eventDatesHint = eventDates
       ? ` The event runs ${escapeHtml(eventDates.startDate)} – ${escapeHtml(eventDates.endDate)}.`
       : "";
+
+    // Pre-fill rather than making the guest look up and retype dates we
+    // already know: their own latest still-open request first (so
+    // re-opening this form to edit doesn't blank out what they already
+    // submitted), then their confirmed booking's dates, then the event's
+    // own dates as the sensible default for a first-time submission —
+    // most attendees stay exactly the length of the event.
+    const prefillCheckIn =
+      latestOpenRequest?.requestedCheckIn ??
+      (hotel.status === "confirmed" ? hotel.checkInDate : null) ??
+      eventDates?.startDate ??
+      "";
+    const prefillCheckOut =
+      latestOpenRequest?.requestedCheckOut ??
+      (hotel.status === "confirmed" ? hotel.checkOutDate : null) ??
+      eventDates?.endDate ??
+      "";
 
     const confirmedSummary =
       hotel.status === "confirmed"
@@ -173,10 +201,10 @@
 
     el.innerHTML = `
       ${confirmedSummary}
-      ${alreadyRequested ? `<div class="notice warn">Request submitted: ${escapeHtml(hotel.openRequests[0].requestedCheckIn)} → ${escapeHtml(hotel.openRequests[0].requestedCheckOut)}. Awaiting booking.</div>` : ""}
+      ${alreadyRequested ? `<div class="notice warn">Request submitted: ${escapeHtml(latestOpenRequest.requestedCheckIn)} → ${escapeHtml(latestOpenRequest.requestedCheckOut)}. Awaiting booking.</div>` : ""}
       <div class="field-row">
-        <div class="field"><label for="checkin">Preferred check-in</label><input id="checkin" type="date" /></div>
-        <div class="field"><label for="checkout">Preferred check-out</label><input id="checkout" type="date" /></div>
+        <div class="field"><label for="checkin">Preferred check-in</label><input id="checkin" type="date" value="${escapeHtml(prefillCheckIn)}" /></div>
+        <div class="field"><label for="checkout">Preferred check-out</label><input id="checkout" type="date" value="${escapeHtml(prefillCheckOut)}" /></div>
       </div>
       ${
         attendee.hotelNoteFieldEnabled
