@@ -269,7 +269,7 @@
       <!-- ============================== Sub-events ============================== -->
       <div class="page" id="page-subevents" style="display:none;">
         <div class="card">
-          <h2>Create sub-event</h2>
+          <h2 id="subevent-form-title">Create sub-event</h2>
           <div class="field-row" style="margin-bottom: 12px;">
             <div class="field"><label>Name</label><input id="se-name" /></div>
             <div class="field"><label>Location</label><input id="se-location" /></div>
@@ -278,6 +278,7 @@
           </div>
           <label style="font-size: 12.5px;"><input type="checkbox" id="se-auto-enroll" /> Auto-enroll new attendees</label>
           <button class="btn" id="add-subevent" style="margin-left: 12px;">Create sub-event</button>
+          <button class="btn ghost" id="cancel-subevent-edit" style="display:none;">Cancel</button>
         </div>
 
         <div class="page-head" style="margin: 20px 0 12px;"><h1 class="page-title" style="font-size:17px;">Sub-events</h1></div>
@@ -2144,6 +2145,7 @@
           ${!se.autoEnrollNewAttendees ? `<button class="btn ghost enroll-all-btn" data-id="${escapeHtml(se.id)}">Enroll all</button>` : ""}
           <button class="btn ghost publish-btn" data-id="${escapeHtml(se.id)}">${se.publishedPdfUrl ? "Re-publish" : "Publish PDF"}</button>
           ${se.publishedPdfUrl ? `<button class="btn ghost view-pdf-btn" data-id="${escapeHtml(se.id)}">View PDF</button>` : ""}
+          <button class="btn ghost edit-subevent-btn" data-id="${escapeHtml(se.id)}">Edit</button>
           <button class="btn ghost delete-subevent-btn" data-id="${escapeHtml(se.id)}" data-name="${escapeHtml(se.name)}" style="color:var(--accent);">Delete</button>
         </div>
       </div>`,
@@ -2178,6 +2180,13 @@
         }
       });
     });
+    document.querySelectorAll(".edit-subevent-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const se = subEventsCache.find((s) => s.id === btn.dataset.id);
+        if (!se) return;
+        enterSubEventEditMode(se);
+      });
+    });
     document.querySelectorAll(".publish-btn").forEach((btn) => {
       btn.addEventListener("click", async () => {
         const res = await api(`/sub-events/${btn.dataset.id}/publish-pdf`, { method: "POST" });
@@ -2192,20 +2201,65 @@
     });
   }
 
+  // Pads a Date/ISO string into the local "YYYY-MM-DDTHH:mm" shape
+  // <input type="datetime-local"> expects -- toISOString() alone would
+  // shift the displayed time to UTC, showing the admin a different clock
+  // time than what they (or a prior edit) originally entered.
+  function toDatetimeLocalValue(dateLike) {
+    const d = new Date(dateLike);
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+
+  let editingSubEventId = null;
+
+  function enterSubEventEditMode(se) {
+    editingSubEventId = se.id;
+    document.getElementById("subevent-form-title").textContent = `Edit sub-event — ${se.name}`;
+    document.getElementById("se-name").value = se.name;
+    document.getElementById("se-location").value = se.location ?? "";
+    document.getElementById("se-starts").value = toDatetimeLocalValue(se.startsAt);
+    document.getElementById("se-ends").value = toDatetimeLocalValue(se.endsAt);
+    document.getElementById("se-auto-enroll").checked = se.autoEnrollNewAttendees;
+    document.getElementById("add-subevent").textContent = "Save changes";
+    document.getElementById("cancel-subevent-edit").style.display = "";
+    document.getElementById("subevent-form-title").scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+
+  function exitSubEventEditMode() {
+    editingSubEventId = null;
+    document.getElementById("subevent-form-title").textContent = "Create sub-event";
+    document.getElementById("se-name").value = "";
+    document.getElementById("se-location").value = "";
+    document.getElementById("se-starts").value = "";
+    document.getElementById("se-ends").value = "";
+    document.getElementById("se-auto-enroll").checked = false;
+    document.getElementById("add-subevent").textContent = "Create sub-event";
+    document.getElementById("cancel-subevent-edit").style.display = "none";
+  }
+
+  document.getElementById("cancel-subevent-edit").addEventListener("click", exitSubEventEditMode);
+
   document.getElementById("add-subevent").addEventListener("click", async () => {
-    const res = await api(`/events/${eventId()}/sub-events`, {
-      method: "POST",
-      body: JSON.stringify({
-        name: document.getElementById("se-name").value,
-        location: document.getElementById("se-location").value,
-        startsAt: new Date(document.getElementById("se-starts").value).toISOString(),
-        endsAt: new Date(document.getElementById("se-ends").value).toISOString(),
-        autoEnrollNewAttendees: document.getElementById("se-auto-enroll").checked,
-      }),
+    const body = JSON.stringify({
+      name: document.getElementById("se-name").value,
+      location: document.getElementById("se-location").value,
+      startsAt: new Date(document.getElementById("se-starts").value).toISOString(),
+      endsAt: new Date(document.getElementById("se-ends").value).toISOString(),
+      autoEnrollNewAttendees: document.getElementById("se-auto-enroll").checked,
     });
+
+    const res = editingSubEventId
+      ? await api(`/sub-events/${editingSubEventId}`, { method: "PATCH", body })
+      : await api(`/events/${eventId()}/sub-events`, { method: "POST", body });
+
     if (res.ok) {
-      showNotice("Sub-event created.", "success");
+      showNotice(editingSubEventId ? "Sub-event updated." : "Sub-event created.", "success");
+      exitSubEventEditMode();
       loadSubEvents();
+    } else {
+      const err = await res.json();
+      showNotice(err.error ?? "Could not save sub-event.", "error");
     }
   });
 
