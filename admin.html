@@ -395,7 +395,7 @@
           <div class="panel-head"><h2>Registration questions</h2></div>
           <p class="hint" style="padding: 0 15px;">Extra questions asked on this event's public registration form, beyond name/email/company. A question can be shown only when another question was answered a specific way (e.g. "Location" only for registrants who picked "M&amp;K" for Company).</p>
           <table class="roster" style="margin-bottom: 0;">
-            <thead><tr><th>Label</th><th>Type</th><th>Required</th><th>Options</th><th>Shown when</th><th></th></tr></thead>
+            <thead><tr><th></th><th>Label</th><th>Type</th><th>Required</th><th>Options</th><th>Shown when</th><th></th></tr></thead>
             <tbody id="questions-body"></tbody>
           </table>
 
@@ -426,6 +426,45 @@
             </label>
             <button class="btn ghost" id="save-question-btn">Add question</button>
             <button class="btn ghost" id="cancel-edit-question-btn" style="display:none;">Cancel edit</button>
+          </div>
+        </div>
+
+        <!-- ADR 0043 — links a select question's options to the org's
+             canonical locations list, so flight-drive-time pre-approval
+             can resolve a real record instead of matching option text.
+             Hidden until "Link locations" is clicked on a dropdown
+             question's row above. -->
+        <div class="panel" id="link-locations-panel" style="display:none;">
+          <div class="panel-head"><h2 id="link-locations-heading">Link locations</h2></div>
+          <p class="hint" style="padding: 0 15px;">Match each option to a canonical location so drive-time pre-approval (below) can find it. Auto-suggested where the text matches exactly.</p>
+          <table class="roster" style="margin-bottom: 0;">
+            <thead><tr><th>Option</th><th>Location</th></tr></thead>
+            <tbody id="link-locations-body"></tbody>
+          </table>
+          <div style="padding: 12px 15px 15px;">
+            <button class="btn ghost" id="save-link-locations-btn">Save links</button>
+            <button class="btn ghost" id="cancel-link-locations-btn">Cancel</button>
+          </div>
+        </div>
+
+        <!-- ADR 0043 — org-wide drive time from THIS event's site, plus the
+             threshold above which a guest's flight-change request is
+             auto-approved without going through the manual queue. -->
+        <div class="panel">
+          <div class="panel-head"><h2>Flight pre-approval by drive time</h2></div>
+          <p class="hint" style="padding: 0 15px;">A guest whose linked location's drive time to this event is at or above the threshold gets their flight change auto-approved, skipping the review queue. Manage the location list itself under Organization.</p>
+          <div class="field-row" style="padding: 0 15px;">
+            <div class="field">
+              <label for="flight-auto-approve-threshold">Auto-approve at (minutes)</label>
+              <input id="flight-auto-approve-threshold" type="number" min="0" step="15" style="max-width:140px;" placeholder="e.g. 420 for 7:00" />
+            </div>
+          </div>
+          <table class="roster" style="margin-bottom: 0;">
+            <thead><tr><th>Location</th><th>State</th><th>Drive time (minutes)</th><th>Label (optional)</th></tr></thead>
+            <tbody id="location-travel-body"></tbody>
+          </table>
+          <div style="padding: 12px 15px 15px;">
+            <button class="btn ghost" id="save-location-travel-btn">Save travel times</button>
           </div>
         </div>
       </div>
@@ -492,6 +531,24 @@
             </div>
           </div>
           <div style="padding: 10px 15px 15px;"><button class="btn ghost" id="invite-admin-btn">Invite</button></div>
+        </div>
+
+        <!-- ADR 0043 — org-wide canonical facility list. Locations live
+             here (org-scoped, like branding/admins) rather than per-event
+             — the same facility list is reused across every event, only
+             drive time (Event settings) changes per event's site. -->
+        <div class="panel">
+          <div class="panel-head"><h2>Locations</h2></div>
+          <p class="hint" style="padding: 0 15px;">Canonical facility list, shared across all your events. Link a registration question's dropdown options to these (Event settings) so flight drive-time pre-approval can resolve a real record.</p>
+          <table class="roster" style="margin-bottom: 0;">
+            <thead><tr><th>Name</th><th>State</th><th></th></tr></thead>
+            <tbody id="locations-body"></tbody>
+          </table>
+          <div class="field-row" style="padding: 12px 15px 0;">
+            <div class="field"><label for="new-location-name">Name</label><input id="new-location-name" /></div>
+            <div class="field"><label for="new-location-state">State</label><input id="new-location-state" maxlength="2" style="max-width:70px;" placeholder="IL" /></div>
+          </div>
+          <div style="padding: 10px 15px 15px;"><button class="btn ghost" id="add-location-btn">Add location</button></div>
         </div>
       </div>
     </main>
@@ -1694,9 +1751,9 @@
   function renderQuestions() {
     document.getElementById("questions-body").innerHTML =
       questionsCache.length === 0
-        ? `<tr><td colspan="6" class="hint">No custom questions yet.</td></tr>`
+        ? `<tr><td colspan="7" class="hint">No custom questions yet.</td></tr>`
         : questionsCache
-            .map((q) => {
+            .map((q, i) => {
               let shownWhen = "Always";
               if (q.visibleIf) {
                 const controller = questionsCache.find((c) => c.id === q.visibleIf.questionId);
@@ -1705,6 +1762,10 @@
                   : "—";
               }
               return `<tr>
+                <td style="white-space:nowrap;">
+                  <button class="btn ghost move-question-up-btn" data-id="${escapeHtml(q.id)}" style="padding:2px 6px; font-size:11px;" ${i === 0 ? "disabled" : ""} title="Move up">↑</button>
+                  <button class="btn ghost move-question-down-btn" data-id="${escapeHtml(q.id)}" style="padding:2px 6px; font-size:11px;" ${i === questionsCache.length - 1 ? "disabled" : ""} title="Move down">↓</button>
+                </td>
                 <td>${escapeHtml(q.label)}</td>
                 <td>${q.fieldType === "select" ? "Dropdown" : "Text"}</td>
                 <td>${q.required ? "Yes" : "No"}</td>
@@ -1713,6 +1774,7 @@
                 <td>
                   <button class="btn ghost edit-question-btn" data-id="${escapeHtml(q.id)}" style="padding:4px 8px; font-size:11px;">Edit</button>
                   <button class="btn ghost delete-question-btn" data-id="${escapeHtml(q.id)}" style="padding:4px 8px; font-size:11px; color:var(--accent);">Delete</button>
+                  ${q.fieldType === "select" ? `<button class="btn ghost link-locations-btn" data-id="${escapeHtml(q.id)}" style="padding:4px 8px; font-size:11px;">Link locations</button>` : ""}
                 </td>
               </tr>`;
             })
@@ -1724,7 +1786,213 @@
     document.querySelectorAll(".delete-question-btn").forEach((btn) => {
       btn.addEventListener("click", () => deleteQuestion(btn.dataset.id));
     });
+    document.querySelectorAll(".move-question-up-btn").forEach((btn) => {
+      btn.addEventListener("click", () => moveQuestion(btn.dataset.id, -1));
+    });
+    document.querySelectorAll(".move-question-down-btn").forEach((btn) => {
+      btn.addEventListener("click", () => moveQuestion(btn.dataset.id, 1));
+    });
+    document.querySelectorAll(".link-locations-btn").forEach((btn) => {
+      btn.addEventListener("click", () => openLinkLocationsPanel(btn.dataset.id));
+    });
   }
+
+  // ADR 0043 — Up/Down buttons rather than drag-and-drop (see the ADR for
+  // why): swap the clicked question with its neighbor in the already-
+  // ordered cache, then send the complete reordered id list. The server
+  // validates it's exactly this event's current question set before
+  // committing (rejects a stale list, e.g. if someone deleted a question
+  // in another tab mid-edit).
+  async function moveQuestion(id, direction) {
+    const index = questionsCache.findIndex((q) => q.id === id);
+    const targetIndex = index + direction;
+    if (index === -1 || targetIndex < 0 || targetIndex >= questionsCache.length) return;
+
+    const reordered = questionsCache.slice();
+    [reordered[index], reordered[targetIndex]] = [reordered[targetIndex], reordered[index]];
+
+    const res = await api(`/events/${eventId()}/questions/reorder`, {
+      method: "PATCH",
+      body: JSON.stringify({ orderedIds: reordered.map((q) => q.id) }),
+    });
+    if (res.ok) {
+      loadRegistrationQuestions();
+    } else {
+      const err = await res.json();
+      showNotice(err.error ?? "Could not reorder questions.", "error");
+    }
+  }
+
+  // ============================== Locations (ADR 0043) ==============================
+  let locationsCache = [];
+
+  async function loadLocations() {
+    const res = await api("/locations");
+    if (!res.ok) return;
+    locationsCache = await res.json();
+    renderLocations();
+  }
+
+  function renderLocations() {
+    const body = document.getElementById("locations-body");
+    if (!body) return;
+    body.innerHTML =
+      locationsCache.length === 0
+        ? `<tr><td colspan="3" class="hint">No locations yet.</td></tr>`
+        : locationsCache
+            .map(
+              (l) => `<tr>
+                <td>${escapeHtml(l.name)}</td>
+                <td>${escapeHtml(l.state ?? "")}</td>
+                <td><button class="btn ghost delete-location-btn" data-id="${escapeHtml(l.id)}" style="padding:4px 8px; font-size:11px; color:var(--accent);">Delete</button></td>
+              </tr>`,
+            )
+            .join("");
+
+    document.querySelectorAll(".delete-location-btn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        if (!confirm("Delete this location? Registration options linked to it lose the link, but aren't deleted.")) return;
+        const res = await api(`/locations/${btn.dataset.id}`, { method: "DELETE" });
+        if (res.ok) {
+          showNotice("Location deleted.", "success");
+          loadLocations();
+        } else {
+          const err = await res.json();
+          showNotice(err.error ?? "Could not delete location.", "error");
+        }
+      });
+    });
+  }
+
+  document.getElementById("add-location-btn").addEventListener("click", async () => {
+    const name = document.getElementById("new-location-name").value.trim();
+    const state = document.getElementById("new-location-state").value.trim();
+    if (!name) return showNotice("Location name is required.", "error");
+
+    const res = await api("/locations", { method: "POST", body: JSON.stringify({ name, state }) });
+    if (res.ok) {
+      showNotice("Location added.", "success");
+      document.getElementById("new-location-name").value = "";
+      document.getElementById("new-location-state").value = "";
+      loadLocations();
+    } else {
+      const err = await res.json();
+      showNotice(err.error ?? "Could not add location.", "error");
+    }
+  });
+
+  // ============================== Link locations (ADR 0043) ==============================
+  let linkLocationsQuestionId = null;
+  let linkLocationsOptions = [];
+
+  async function openLinkLocationsPanel(questionId) {
+    const question = questionsCache.find((q) => q.id === questionId);
+    if (!question) return;
+    linkLocationsQuestionId = questionId;
+
+    if (locationsCache.length === 0) await loadLocations();
+
+    const res = await api(`/questions/${questionId}/options`);
+    if (!res.ok) return showNotice("Could not load options.", "error");
+    linkLocationsOptions = await res.json();
+
+    document.getElementById("link-locations-heading").textContent = `Link locations — ${question.label}`;
+    document.getElementById("link-locations-body").innerHTML = linkLocationsOptions
+      .map((o) => {
+        // Auto-suggest an exact name match for an as-yet-unlinked option —
+        // display only, not saved until "Save links" is clicked.
+        const suggested = o.locationId ?? locationsCache.find((l) => l.name === o.value)?.id ?? "";
+        const optionsHtml =
+          `<option value="">Not linked</option>` +
+          locationsCache
+            .map((l) => `<option value="${escapeHtml(l.id)}" ${l.id === suggested ? "selected" : ""}>${escapeHtml(l.name)}${l.state ? ` (${escapeHtml(l.state)})` : ""}</option>`)
+            .join("");
+        return `<tr>
+          <td>${escapeHtml(o.value)}</td>
+          <td><div class="field" style="margin-bottom:0;"><select class="link-location-select" data-option-id="${escapeHtml(o.id)}">${optionsHtml}</select></div></td>
+        </tr>`;
+      })
+      .join("");
+
+    document.getElementById("link-locations-panel").style.display = "";
+    document.getElementById("link-locations-panel").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
+  document.getElementById("cancel-link-locations-btn").addEventListener("click", () => {
+    document.getElementById("link-locations-panel").style.display = "none";
+    linkLocationsQuestionId = null;
+  });
+
+  document.getElementById("save-link-locations-btn").addEventListener("click", async () => {
+    const links = Array.from(document.querySelectorAll(".link-location-select")).map((sel) => ({
+      optionId: sel.dataset.optionId,
+      locationId: sel.value || null,
+    }));
+    const res = await api(`/questions/${linkLocationsQuestionId}/options/link-locations`, {
+      method: "PATCH",
+      body: JSON.stringify({ links }),
+    });
+    if (res.ok) {
+      showNotice("Location links saved.", "success");
+      document.getElementById("link-locations-panel").style.display = "none";
+      linkLocationsQuestionId = null;
+    } else {
+      const err = await res.json();
+      showNotice(err.error ?? "Could not save location links.", "error");
+    }
+  });
+
+  // ============================== Flight pre-approval drive time (ADR 0043) ==============================
+  async function loadLocationTravel() {
+    if (locationsCache.length === 0) await loadLocations();
+    const res = await api(`/events/${eventId()}/location-travel`);
+    if (!res.ok) return;
+    const data = await res.json();
+
+    document.getElementById("flight-auto-approve-threshold").value = data.flightAutoApproveDriveTimeMinutes ?? "";
+    document.getElementById("location-travel-body").innerHTML =
+      data.locations.length === 0
+        ? `<tr><td colspan="4" class="hint">No locations yet — add some under Organization.</td></tr>`
+        : data.locations
+            .map(
+              (l) => `<tr>
+                <td>${escapeHtml(l.name)}</td>
+                <td>${escapeHtml(l.state ?? "")}</td>
+                <td><div class="field" style="margin-bottom:0;"><input class="travel-minutes-input" data-location-id="${escapeHtml(l.locationId)}" type="number" min="0" step="5" value="${l.driveTimeMinutes ?? ""}" style="max-width:100px;" /></div></td>
+                <td><div class="field" style="margin-bottom:0;"><input class="travel-label-input" data-location-id="${escapeHtml(l.locationId)}" value="${escapeHtml(l.driveTimeLabel ?? "")}" placeholder="e.g. 8:00+" style="max-width:140px;" /></div></td>
+              </tr>`,
+            )
+            .join("");
+  }
+
+  document.getElementById("save-location-travel-btn").addEventListener("click", async () => {
+    const thresholdRaw = document.getElementById("flight-auto-approve-threshold").value;
+    const threshold = thresholdRaw === "" ? null : Number(thresholdRaw);
+
+    const minutesInputs = Array.from(document.querySelectorAll(".travel-minutes-input"));
+    const entries = minutesInputs
+      .filter((input) => input.value !== "")
+      .map((input) => {
+        const labelInput = document.querySelector(`.travel-label-input[data-location-id="${input.dataset.locationId}"]`);
+        return {
+          locationId: input.dataset.locationId,
+          driveTimeMinutes: Number(input.value),
+          driveTimeLabel: labelInput?.value.trim() || undefined,
+        };
+      });
+
+    const res = await api(`/events/${eventId()}/location-travel`, {
+      method: "PATCH",
+      body: JSON.stringify({ entries, flightAutoApproveDriveTimeMinutes: threshold }),
+    });
+    if (res.ok) {
+      showNotice("Travel times saved.", "success");
+      loadLocationTravel();
+    } else {
+      const err = await res.json();
+      showNotice(err.error ?? "Could not save travel times.", "error");
+    }
+  });
 
   async function loadRegistrationQuestions() {
     const res = await api(`/events/${eventId()}/questions`);
@@ -2191,12 +2459,14 @@
       loadRegistrationSettings();
       loadFieldFreeze();
       loadRegistrationQuestions();
+      loadLocationTravel();
     } else if (page === "events") {
       loadEventList();
     } else if (page === "organization") {
       loadBranding();
       loadApprovalConfig();
       loadAdmins();
+      loadLocations();
     }
   }
 
