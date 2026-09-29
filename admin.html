@@ -313,6 +313,18 @@
           </div>
         </div>
 
+        <!-- ADR 0044 — presentational-only toggle; suppresses the optional
+             "Anything we should know?" note field on the guest hotel-
+             request form for this event. -->
+        <div class="panel">
+          <div class="panel-head"><h2>Guest hotel request form</h2></div>
+          <div style="padding: 12px 15px 15px;">
+            <label style="font-size: 12.5px;">
+              <input type="checkbox" id="hotel-note-field-enabled" /> Ask "Anything we should know?" on the guest hotel-request form
+            </label>
+          </div>
+        </div>
+
         <!-- ADR 0038 — every confirmed assignment, with a direct edit action
              so an admin can nudge dates for anyone, not only attendees who
              happen to have an open request. -->
@@ -2213,6 +2225,8 @@
     for (const [key, id, fallback] of HOTEL_LABEL_FIELDS) {
       document.getElementById(id).value = labels[key] ?? fallback;
     }
+    // ADR 0044
+    document.getElementById("hotel-note-field-enabled").checked = event?.hotelNoteFieldEnabled ?? true;
   }
 
   document.getElementById("save-labels").addEventListener("click", async () => {
@@ -2223,6 +2237,22 @@
       ),
     });
     if (res.ok) showNotice("Column labels saved.", "success");
+  });
+
+  // ADR 0044 — saves immediately on change, same pattern as the approval-
+  // routing checkboxes on the Organization page.
+  document.getElementById("hotel-note-field-enabled").addEventListener("change", async (e) => {
+    const res = await api(`/events/${eventId()}`, {
+      method: "PATCH",
+      body: JSON.stringify({ hotelNoteFieldEnabled: e.target.checked }),
+    });
+    if (res.ok) {
+      showNotice("Saved.", "success");
+    } else {
+      const err = await res.json();
+      showNotice(err.error ?? "Could not save.", "error");
+      e.target.checked = !e.target.checked;
+    }
   });
 
   document.getElementById("export-csv").addEventListener("click", async () => {

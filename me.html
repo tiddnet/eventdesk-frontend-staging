@@ -178,10 +178,14 @@
         <div class="field"><label for="checkin">Preferred check-in</label><input id="checkin" type="date" /></div>
         <div class="field"><label for="checkout">Preferred check-out</label><input id="checkout" type="date" /></div>
       </div>
-      <div class="field">
+      ${
+        attendee.hotelNoteFieldEnabled
+          ? `<div class="field">
         <label for="hotel-note">Anything we should know?</label>
         <input id="hotel-note" placeholder="Arriving early, need a pet-friendly room, etc." />
-      </div>
+      </div>`
+          : ""
+      }
       <button class="btn" id="submit-hotel-request">${alreadyRequested ? "Update request" : hotel.status === "confirmed" ? "Request a change" : "Submit availability"}</button>
     `;
 
@@ -196,7 +200,7 @@
         body: JSON.stringify({
           requestedCheckIn,
           requestedCheckOut,
-          note: document.getElementById("hotel-note").value,
+          note: document.getElementById("hotel-note")?.value ?? "",
         }),
       });
       if (res.ok) {
