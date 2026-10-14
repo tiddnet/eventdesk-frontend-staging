@@ -90,7 +90,7 @@
 <body>
 <div class="shell wide">
   <h1>Admin dashboard</h1>
-  <div id="notice"></div>
+  <div id="notice" class="notice-toast"></div>
 
   <div class="admin-shell">
     <nav class="admin-nav">
@@ -472,14 +472,26 @@
         <div class="panel">
           <div class="panel-head"><h2>Drive times &amp; travel</h2></div>
           <p class="hint" style="padding: 0 15px;">Drive time from each location to this event's site. Both options below use the same threshold. Manage the location list itself under Organization.</p>
-          <div class="field-row" style="padding: 0 15px;">
+          <!-- ADR 0047 — collapsed by default; missing times are entered in the
+               gap box below, so the full table is only needed to review/edit. -->
+          <div style="padding: 0 15px; display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+            <span id="travel-table-summary" class="hint" style="margin:0;"></span>
+            <button class="btn ghost" id="toggle-travel-table" style="padding: 4px 10px; font-size: 12px;">Edit drive times</button>
+          </div>
+          <div id="travel-table-wrap" style="display:none;">
+            <table class="roster" style="margin-bottom: 0;">
+              <thead><tr><th>Location</th><th>State</th><th>Drive time (minutes)</th><th>Label (optional)</th></tr></thead>
+              <tbody id="location-travel-body"></tbody>
+            </table>
+          </div>
+          <!-- ADR 0047 — every control this panel saves sits directly above its
+               Save button, and a missing drive time can be entered right where
+               the toggle that needs it is ticked. -->
+          <div style="padding: 14px 15px 0;">
             <div class="field">
               <label for="flight-auto-approve-threshold">Drive-time threshold (minutes)</label>
               <input id="flight-auto-approve-threshold" type="number" min="0" step="15" style="max-width:140px;" placeholder="e.g. 300 for 5:00" />
             </div>
-          </div>
-          <!-- ADR 0046 -->
-          <div style="padding: 0 15px 8px;">
             <label style="font-size: 12.5px; display:block; margin-bottom: 6px;">
               <input type="checkbox" id="travel-mode-prompt-enabled" /> Ask guests whether they'll drive or fly
             </label>
@@ -489,12 +501,9 @@
             </label>
             <div id="missing-drive-times"></div>
           </div>
-          <table class="roster" style="margin-bottom: 0;">
-            <thead><tr><th>Location</th><th>State</th><th>Drive time (minutes)</th><th>Label (optional)</th></tr></thead>
-            <tbody id="location-travel-body"></tbody>
-          </table>
-          <div style="padding: 12px 15px 15px;">
-            <button class="btn ghost" id="save-location-travel-btn">Save travel settings</button>
+          <div style="padding: 12px 15px 15px; display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+            <button class="btn" id="save-location-travel-btn">Save travel settings</button>
+            <span id="travel-save-status" style="font-size: 12.5px;"></span>
           </div>
         </div>
       </div>
@@ -593,9 +602,19 @@
   }
 
   const notice = document.getElementById("notice");
+  // ADR 0047 — #notice is a fixed toast (style.css .notice-toast), visible
+  // at any scroll position. Success clears itself; errors stay until
+  // clicked or replaced.
+  let noticeTimer = null;
   function showNotice(text, kind) {
-    notice.innerHTML = `<div class="notice ${kind}">${text}</div>`;
+    clearTimeout(noticeTimer);
+    notice.innerHTML = `<div class="notice ${kind}" title="Click to dismiss">${text}</div>`;
+    if (kind === "success") noticeTimer = setTimeout(() => (notice.innerHTML = ""), 4000);
   }
+  notice.addEventListener("click", () => {
+    clearTimeout(noticeTimer);
+    notice.innerHTML = "";
+  });
 
   function escapeHtml(s) {
     return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -2023,10 +2042,9 @@
     // ADR 0046 — a linked location with no drive time leaves its guests
     // "unknown" (asked drive/fly, never auto-approved). Turning a toggle on
     // is refused while any are missing; once on, this is the only signal.
-    const missing = data.missingDriveTimes ?? [];
-    document.getElementById("missing-drive-times").innerHTML = missing.length
-      ? `<div class="notice warn" style="margin-top:8px;">Missing drive times: ${missing.map((l) => escapeHtml(l.name)).join(", ")}</div>`
-      : "";
+    travelMissing = data.missingDriveTimes ?? [];
+    travelSaved = { prompt: !!data.travelModePromptEnabled, autoApprove: !!data.flightAutoApproveEnabled };
+    document.getElementById("travel-save-status").textContent = "";
     document.getElementById("location-travel-body").innerHTML =
       data.locations.length === 0
         ? `<tr><td colspan="4" class="hint">No locations yet — add some under Organization.</td></tr>`
@@ -2040,9 +2058,125 @@
               </tr>`,
             )
             .join("");
+    // Typing in the table keeps any matching gap-box input in step.
+    document.querySelectorAll(".travel-minutes-input").forEach((input) => {
+      input.addEventListener("input", () => {
+        const gap = document.querySelector(`.gap-minutes-input[data-location-id="${input.dataset.locationId}"]`);
+        if (gap) gap.value = input.value;
+        if (input.value !== "") gap?.classList.remove("needs-value");
+      });
+    });
+    const withTime = data.locations.filter((l) => l.driveTimeMinutes !== null && l.driveTimeMinutes !== undefined).length;
+    document.getElementById("travel-table-summary").textContent = data.locations.length
+      ? `${data.locations.length} locations · ${withTime} with drive times`
+      : "No locations yet — add some under Organization.";
+    document.getElementById("toggle-travel-table").style.display = data.locations.length ? "" : "none";
+    renderTravelGapBox();
+  }
+
+  document.getElementById("toggle-travel-table").addEventListener("click", (e) => {
+    const wrap = document.getElementById("travel-table-wrap");
+    const opening = wrap.style.display === "none";
+    wrap.style.display = opening ? "" : "none";
+    e.target.textContent = opening ? "Hide drive times" : "Edit drive times";
+  });
+
+  // ============================== ADR 0047 — inline drive-time gaps ==============================
+  let travelMissing = [];
+  // Saved state per toggle — "turning on" is judged per toggle (auto-approve
+  // defaults on, so "any toggle already on" would skip the check when the
+  // drive/fly prompt is the one being turned on).
+  let travelSaved = { prompt: false, autoApprove: false };
+
+  function travelToggleTurningOn() {
+    return (
+      (document.getElementById("travel-mode-prompt-enabled").checked && !travelSaved.prompt) ||
+      (document.getElementById("flight-auto-approve-enabled").checked && !travelSaved.autoApprove)
+    );
+  }
+
+  function travelToggleTicked() {
+    return (
+      document.getElementById("travel-mode-prompt-enabled").checked ||
+      document.getElementById("flight-auto-approve-enabled").checked
+    );
+  }
+
+  function tableMinutesInput(locationId) {
+    return document.querySelector(`.travel-minutes-input[data-location-id="${locationId}"]`);
+  }
+
+  function stillMissingLocations() {
+    return travelMissing.filter((l) => (tableMinutesInput(l.id)?.value ?? "") === "");
+  }
+
+  // The fix belongs next to the toggle that needs it: when a toggle is
+  // ticked and linked locations lack a drive time, those locations get
+  // inputs right here (writing through to the table — one source of truth).
+  // Rows stay put while typing; re-rendered only on load/toggle change.
+  function renderTravelGapBox() {
+    const el = document.getElementById("missing-drive-times");
+    if (travelMissing.length === 0) {
+      el.innerHTML = "";
+      return;
+    }
+    if (!travelToggleTicked()) {
+      el.innerHTML = `<p class="hint" style="margin:4px 0 0;">No drive time yet for: ${travelMissing.map((l) => escapeHtml(l.name)).join(", ")}</p>`;
+      return;
+    }
+    const intro = !travelToggleTurningOn()
+      ? "These locations have no drive time yet — their guests are treated as unknown distance (asked drive/fly, never auto-approved). Add them here:"
+      : "Add drive times for these locations to turn this on:";
+    el.innerHTML = `
+      <div class="travel-gap-box">
+        <div style="font-size:12.5px; font-weight:600;">${intro}</div>
+        ${travelMissing
+          .map(
+            (l) => `<div class="gap-row">
+              <span>${escapeHtml(l.name)}</span>
+              <input class="gap-minutes-input" data-location-id="${escapeHtml(l.id)}" type="number" min="0" step="5" placeholder="minutes" value="${escapeHtml(tableMinutesInput(l.id)?.value ?? "")}" />
+              <span class="hint" style="margin:0; min-width:0;">minutes</span>
+            </div>`,
+          )
+          .join("")}
+      </div>`;
+    el.querySelectorAll(".gap-minutes-input").forEach((input) => {
+      input.addEventListener("input", () => {
+        const row = tableMinutesInput(input.dataset.locationId);
+        if (row) row.value = input.value;
+        if (input.value !== "") input.classList.remove("needs-value");
+      });
+    });
+  }
+
+  ["travel-mode-prompt-enabled", "flight-auto-approve-enabled"].forEach((id) =>
+    document.getElementById(id).addEventListener("change", renderTravelGapBox),
+  );
+
+  function setTravelStatus(text, kind) {
+    const el = document.getElementById("travel-save-status");
+    el.textContent = text;
+    el.style.color = kind === "error" ? "var(--accent)" : kind === "success" ? "var(--success)" : "var(--ink-soft)";
+  }
+
+  function flagMissingGapInputs() {
+    renderTravelGapBox();
+    const blanks = Array.from(document.querySelectorAll(".gap-minutes-input")).filter((i) => i.value === "");
+    blanks.forEach((i) => i.classList.add("needs-value"));
+    blanks[0]?.focus();
   }
 
   document.getElementById("save-location-travel-btn").addEventListener("click", async () => {
+    setTravelStatus("Saving…", "info");
+    // ADR 0047 — catch the missing-drive-time refusal before sending, and
+    // say so beside the button rather than only at the top of the page.
+    const turningOnWithGaps = travelToggleTurningOn() && stillMissingLocations().length > 0;
+    if (turningOnWithGaps) {
+      setTravelStatus(`Add a drive time for: ${stillMissingLocations().map((l) => l.name).join(", ")}`, "error");
+      flagMissingGapInputs();
+      return;
+    }
+
     const thresholdRaw = document.getElementById("flight-auto-approve-threshold").value;
     const threshold = thresholdRaw === "" ? null : Number(thresholdRaw);
 
@@ -2069,10 +2203,19 @@
     });
     if (res.ok) {
       showNotice("Travel settings saved.", "success");
-      loadLocationTravel();
+      await loadLocationTravel();
+      setTravelStatus("Saved ✓", "success");
     } else {
       const err = await res.json();
-      showNotice(escapeHtml(err.error ?? "Could not save travel settings."), "error");
+      const message = err.error ?? "Could not save travel settings.";
+      showNotice(escapeHtml(message), "error");
+      setTravelStatus(message, "error");
+      // Server-side refusal (ADR 0046) — e.g. another admin linked a new
+      // location since this page loaded. Same inline remedy.
+      if (err.missingLocations?.length) {
+        travelMissing = err.missingLocations;
+        flagMissingGapInputs();
+      }
     }
   });
 

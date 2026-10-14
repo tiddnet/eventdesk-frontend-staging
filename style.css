@@ -109,3 +109,23 @@ td { padding: 8px 10px; border-bottom: 1px solid var(--border); }
 .notice.warn { background: var(--warning-soft); color: var(--warning); }
 .notice.error { background: #f8ddd9; color: var(--accent); }
 .notice.success { background: var(--success-soft); color: var(--success); }
+
+/* ADR 0047 — admin.html's #notice floats at the top of the viewport so a
+   save far down a long settings page still shows its result. Scoped to
+   this class (guest pages keep the in-flow banner). */
+.notice-toast {
+  position: fixed; top: 12px; left: 50%; transform: translateX(-50%);
+  z-index: 1000; width: min(560px, calc(100vw - 32px)); pointer-events: none;
+}
+.notice-toast .notice {
+  pointer-events: auto; cursor: pointer; margin: 0;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.18);
+}
+.travel-gap-box {
+  border: 1px solid var(--warning); background: var(--warning-soft);
+  border-radius: var(--radius); padding: 10px 12px; margin: 8px 0 4px;
+}
+.travel-gap-box .gap-row { display: flex; align-items: center; gap: 10px; margin-top: 6px; font-size: 12.5px; }
+.travel-gap-box .gap-row span { min-width: 140px; }
+.travel-gap-box input { max-width: 100px; }
+input.needs-value { outline: 2px solid var(--accent); outline-offset: 1px; }
