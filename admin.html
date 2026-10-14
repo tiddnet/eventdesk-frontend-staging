@@ -223,7 +223,7 @@
 
         <div class="panel">
           <div class="panel-head">
-            <div><h2 style="display:inline;">Roster</h2> <span class="count-pill" id="roster-count-pill">0</span></div>
+            <div><h2 style="display:inline;">Roster</h2> <span class="count-pill" id="roster-count-pill">0</span> <span class="hint" id="roster-submitted-summary" style="margin-left:8px;"></span></div>
             <!-- ADR 0040 Phase 2 — includes every registration-question answer as its
                  own column (Cell #, Company, Location, Department, etc.), not just
                  name/email/affiliation, so an org can sort/filter on those in a
@@ -231,7 +231,7 @@
             <button class="btn ghost" id="roster-export-csv" style="padding: 4px 10px; font-size: 12px;">Export roster CSV</button>
           </div>
           <table class="roster" style="margin-top: 0;">
-            <thead><tr><th>Name</th><th>Affiliation</th><th>Source</th><th>Billing</th><th class="flight-feature">Flight</th><th>Note</th><th></th></tr></thead>
+            <thead><tr><th>Name</th><th>Affiliation</th><th>Source</th><th>Billing</th><th>Travel</th><th>Submitted</th><th class="flight-feature">Flight</th><th>Note</th><th></th></tr></thead>
             <tbody id="roster-body"></tbody>
           </table>
         </div>
@@ -382,6 +382,12 @@
             <input type="checkbox" id="allow-self-registration" /> Allow public self-registration for this event
           </label>
           <button class="btn ghost" id="save-registration-setting" style="margin-left: 12px; padding: 4px 10px; font-size: 12px;">Save</button>
+          <!-- ADR 0046 — saves on change. Off hides the guest Sessions card and
+               refuses guest sign-up/leave; admin enrollment is unaffected. -->
+          <label style="font-size: 12.5px; display:block; margin-top: 12px;">
+            <input type="checkbox" id="guest-session-choice-enabled" /> Guests can sign up for / leave sessions
+          </label>
+          <p class="hint" style="margin: 4px 0 0;">Turn off when session attendance is mandatory — guests won't see a Sessions section at all.</p>
           <p class="hint" style="margin: 10px 0 0;">
             Public registration link: <code id="registration-link"></code>
             <button class="btn ghost" id="copy-registration-link" style="padding: 2px 8px; font-size: 11px;">Copy</button>
@@ -464,20 +470,31 @@
              threshold above which a guest's flight-change request is
              auto-approved without going through the manual queue. -->
         <div class="panel">
-          <div class="panel-head"><h2>Flight pre-approval by drive time</h2></div>
-          <p class="hint" style="padding: 0 15px;">A guest whose linked location's drive time to this event is at or above the threshold gets their flight change auto-approved, skipping the review queue. Manage the location list itself under Organization.</p>
+          <div class="panel-head"><h2>Drive times &amp; travel</h2></div>
+          <p class="hint" style="padding: 0 15px;">Drive time from each location to this event's site. Both options below use the same threshold. Manage the location list itself under Organization.</p>
           <div class="field-row" style="padding: 0 15px;">
             <div class="field">
-              <label for="flight-auto-approve-threshold">Auto-approve at (minutes)</label>
-              <input id="flight-auto-approve-threshold" type="number" min="0" step="15" style="max-width:140px;" placeholder="e.g. 420 for 7:00" />
+              <label for="flight-auto-approve-threshold">Drive-time threshold (minutes)</label>
+              <input id="flight-auto-approve-threshold" type="number" min="0" step="15" style="max-width:140px;" placeholder="e.g. 300 for 5:00" />
             </div>
+          </div>
+          <!-- ADR 0046 -->
+          <div style="padding: 0 15px 8px;">
+            <label style="font-size: 12.5px; display:block; margin-bottom: 6px;">
+              <input type="checkbox" id="travel-mode-prompt-enabled" /> Ask guests whether they'll drive or fly
+            </label>
+            <p class="hint" style="margin: -2px 0 8px 22px;">With a threshold, only guests at or above it (or whose location is unknown) are asked; without one, everyone is. Guests below the threshold don't see the flight section.</p>
+            <label style="font-size: 12.5px; display:block; margin-bottom: 6px;">
+              <input type="checkbox" id="flight-auto-approve-enabled" /> Auto-approve flight changes at or above the threshold
+            </label>
+            <div id="missing-drive-times"></div>
           </div>
           <table class="roster" style="margin-bottom: 0;">
             <thead><tr><th>Location</th><th>State</th><th>Drive time (minutes)</th><th>Label (optional)</th></tr></thead>
             <tbody id="location-travel-body"></tbody>
           </table>
           <div style="padding: 12px 15px 15px;">
-            <button class="btn ghost" id="save-location-travel-btn">Save travel times</button>
+            <button class="btn ghost" id="save-location-travel-btn">Save travel settings</button>
           </div>
         </div>
       </div>
@@ -1029,12 +1046,27 @@
     URL.revokeObjectURL(url);
   });
 
+  // ADR 0046 — Drive / Fly / Not answered / Not asked, plus a marker for
+  // guests with no known drive time (no location answer, or a location
+  // with no drive time entered) so the admin can fill the gap.
+  function rosterTravelCell(a) {
+    const answer = a.travelMode === "fly" ? "Fly" : a.travelMode === "drive" ? "Drive" : null;
+    const status = answer ?? (a.travelModeAsked ? '<span class="hint" style="margin:0;">Not answered</span>' : '<span class="hint" style="margin:0;">Not asked</span>');
+    const unknown = a.driveTimeMinutes === null ? ' <span class="hint" style="margin:0;" title="No location answer or no drive time for their location">· no location</span>' : "";
+    return `${status}${unknown}`;
+  }
+
   async function loadRoster() {
     const res = await api(`/events/${eventId()}/attendees`);
     rosterCache = await res.json();
     document.getElementById("roster-count-pill").textContent = rosterCache.length;
+    // ADR 0046
+    const submittedCount = rosterCache.filter((a) => a.registrationSubmittedAt).length;
+    document.getElementById("roster-submitted-summary").textContent = rosterCache.length
+      ? `${submittedCount} of ${rosterCache.length} submitted`
+      : "";
     document.getElementById("roster-body").innerHTML = rosterCache.length === 0
-      ? `<tr><td colspan="7" class="hint">No attendees yet — add one above.</td></tr>`
+      ? `<tr><td colspan="9" class="hint">No attendees yet — add one above.</td></tr>`
       : rosterCache
       .map(
         (a) => `
@@ -1043,6 +1075,8 @@
         <td><span class="badge">${escapeHtml(a.affiliation)}</span></td>
         <td>${a.registrationSource === "self_registered" ? '<span class="dot ok"></span>self-registered' : '<span class="dot none"></span>admin-added'}</td>
         <td>${a.billedToMaster ? "Master account" : escapeHtml(a.companyName ?? "Own company")}</td>
+        <td>${rosterTravelCell(a)}</td>
+        <td>${a.registrationSubmittedAt ? `<span class="dot ok"></span>${escapeHtml(new Date(a.registrationSubmittedAt).toLocaleDateString())}` : '<span class="dot none"></span>Not yet'}</td>
         <td class="flight-feature"><button class="btn ghost flight-btn" data-attendee="${escapeHtml(a.id)}" style="padding:4px 8px; font-size:11px;">✈ Set</button></td>
         <td class="note-flag" ${a.hasPrivateNote ? 'title="Admin note on file"' : ""}>${a.hasPrivateNote ? "●" : ""}</td>
         <td>
@@ -1509,7 +1543,28 @@
     const event = await res.json();
     document.getElementById("allow-self-registration").checked = event.allowSelfRegistration;
     document.getElementById("registration-link").textContent = registrationUrlFor(eventId());
+    // ADR 0046 — admin-only setting, so from the admin events list rather
+    // than the public endpoint above.
+    const listRes = await api("/events");
+    if (listRes.ok) {
+      const adminEvent = (await listRes.json()).find((e) => e.id === eventId());
+      document.getElementById("guest-session-choice-enabled").checked = adminEvent?.guestSessionChoiceEnabled ?? true;
+    }
   }
+
+  document.getElementById("guest-session-choice-enabled").addEventListener("change", async (e) => {
+    const res = await api(`/events/${eventId()}`, {
+      method: "PATCH",
+      body: JSON.stringify({ guestSessionChoiceEnabled: e.target.checked }),
+    });
+    if (res.ok) {
+      showNotice("Saved.", "success");
+    } else {
+      const err = await res.json();
+      showNotice(escapeHtml(err.error ?? "Could not save."), "error");
+      e.target.checked = !e.target.checked;
+    }
+  });
 
   document.getElementById("save-registration-setting").addEventListener("click", async () => {
     const res = await api(`/events/${eventId()}`, {
@@ -1963,6 +2018,15 @@
     const data = await res.json();
 
     document.getElementById("flight-auto-approve-threshold").value = data.flightAutoApproveDriveTimeMinutes ?? "";
+    document.getElementById("travel-mode-prompt-enabled").checked = !!data.travelModePromptEnabled;
+    document.getElementById("flight-auto-approve-enabled").checked = !!data.flightAutoApproveEnabled;
+    // ADR 0046 — a linked location with no drive time leaves its guests
+    // "unknown" (asked drive/fly, never auto-approved). Turning a toggle on
+    // is refused while any are missing; once on, this is the only signal.
+    const missing = data.missingDriveTimes ?? [];
+    document.getElementById("missing-drive-times").innerHTML = missing.length
+      ? `<div class="notice warn" style="margin-top:8px;">Missing drive times: ${missing.map((l) => escapeHtml(l.name)).join(", ")}</div>`
+      : "";
     document.getElementById("location-travel-body").innerHTML =
       data.locations.length === 0
         ? `<tr><td colspan="4" class="hint">No locations yet — add some under Organization.</td></tr>`
@@ -1996,14 +2060,19 @@
 
     const res = await api(`/events/${eventId()}/location-travel`, {
       method: "PATCH",
-      body: JSON.stringify({ entries, flightAutoApproveDriveTimeMinutes: threshold }),
+      body: JSON.stringify({
+        entries,
+        flightAutoApproveDriveTimeMinutes: threshold,
+        travelModePromptEnabled: document.getElementById("travel-mode-prompt-enabled").checked,
+        flightAutoApproveEnabled: document.getElementById("flight-auto-approve-enabled").checked,
+      }),
     });
     if (res.ok) {
-      showNotice("Travel times saved.", "success");
+      showNotice("Travel settings saved.", "success");
       loadLocationTravel();
     } else {
       const err = await res.json();
-      showNotice(err.error ?? "Could not save travel times.", "error");
+      showNotice(escapeHtml(err.error ?? "Could not save travel settings."), "error");
     }
   });
 

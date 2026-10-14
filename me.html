@@ -44,6 +44,12 @@
     <div id="hotel-section"></div>
   </div>
 
+  <!-- ADR 0046 — only rendered for guests resolveTravelModePrompt asks. -->
+  <div class="card" id="travel-card" style="display:none;">
+    <h2>Travel</h2>
+    <div id="travel-section"></div>
+  </div>
+
   <div class="card" id="flight-card">
     <h2>Flight information</h2>
     <div id="flight-section"></div>
@@ -52,6 +58,23 @@
   <div class="card" id="sub-events-card" style="display:none;">
     <h2>Sessions</h2>
     <div id="sub-events-section"></div>
+  </div>
+
+  <!-- ADR 0046 — the one moment a guest declares themselves done. -->
+  <div class="card" id="submit-card" style="display:none;">
+    <h2>Submit registration</h2>
+    <div id="submit-section"></div>
+  </div>
+</div>
+
+<!-- ADR 0046 — thank-you view; swaps in for the form after a first submit. -->
+<div class="shell" id="thanks-view" style="display:none;">
+  <div class="card">
+    <h2>Thank you — you're registered!</h2>
+    <p>Your registration has been submitted. We've emailed you a copy of these details.</p>
+    <div id="thanks-summary"></div>
+    <p class="hint">You can still update anything until the organizer closes changes.</p>
+    <button class="btn ghost" id="back-to-registration">Review or edit my registration</button>
   </div>
 </div>
 
@@ -95,6 +118,104 @@
   // this fetch resolves.
   let eventDates = null;
   let currentAttendee = null;
+  let flightTrackingEnabled = true;
+
+  // ADR 0046 — flight section needs org flight tracking on AND, when the
+  // event asks drive/fly, a guest who was asked and answered "fly".
+  // Guests below the drive-time threshold (prompt on, not asked) never
+  // see it. Prompt off = today's behavior.
+  function updateFlightVisibility() {
+    const a = currentAttendee;
+    const travelAllows = !a || !a.travelModePromptEnabled || (a.travelModeAsked && a.travelMode === "fly");
+    document.getElementById("flight-card").style.display = flightTrackingEnabled && travelAllows ? "" : "none";
+  }
+
+  function renderTravel(attendee) {
+    const card = document.getElementById("travel-card");
+    if (!attendee.travelModeAsked) {
+      card.style.display = "none";
+      return;
+    }
+    card.style.display = "";
+    const choice = (value, label) => `
+      <label style="display:flex; align-items:center; gap:8px; margin-bottom:8px; font-size:14px;">
+        <input type="radio" name="travel-mode" value="${value}" ${attendee.travelMode === value ? "checked" : ""} /> ${label}
+      </label>`;
+    document.getElementById("travel-section").innerHTML = `
+      <p class="hint">Will you drive or fly to the event?</p>
+      ${choice("drive", "I'll drive")}
+      ${choice("fly", "I'll fly")}
+      <div id="travel-saved" class="hint" style="margin-top:4px;"></div>
+    `;
+    document.querySelectorAll('input[name="travel-mode"]').forEach((input) => {
+      input.addEventListener("change", async () => {
+        const res = await api("/me/travel-mode", {
+          method: "PATCH",
+          body: JSON.stringify({ travelMode: input.value }),
+        });
+        if (res.ok) {
+          // Inline, next to the control — a top-of-page banner is easy to
+          // miss this far down (part of Erin's original ask). Set after the
+          // re-render, which would otherwise wipe it.
+          await loadMe();
+          document.getElementById("travel-saved").textContent = "Saved ✓";
+        } else {
+          const err = await res.json();
+          showNotice(escapeHtml(err.error ?? "Something went wrong."), "error");
+        }
+      });
+    });
+  }
+
+  function renderSubmit(attendee) {
+    const card = document.getElementById("submit-card");
+    card.style.display = "";
+    const el = document.getElementById("submit-section");
+    if (attendee.registrationSubmittedAt) {
+      el.innerHTML = `<div class="notice success">✓ Registration submitted ${escapeHtml(new Date(attendee.registrationSubmittedAt).toLocaleString())}. Changes you make above are saved as you go.</div>`;
+      return;
+    }
+    const blockers = attendee.submitBlockers ?? [];
+    el.innerHTML = `
+      ${blockers.length ? `<p class="hint">Before you can submit:</p><ul class="hint">${blockers.map((b) => `<li>${escapeHtml(b)}</li>`).join("")}</ul>` : `<p class="hint">All set — submit to finish your registration. We'll email you a confirmation.</p>`}
+      <button class="btn" id="submit-registration" ${blockers.length ? "disabled" : ""}>Submit registration</button>
+    `;
+    document.getElementById("submit-registration").addEventListener("click", async (e) => {
+      e.target.disabled = true;
+      const res = await api("/me/submit-registration", { method: "POST" });
+      if (res.ok) {
+        await loadMe();
+        showThanks(currentAttendee);
+      } else {
+        const err = await res.json();
+        showNotice(escapeHtml(err.error ?? "Something went wrong."), "error");
+        e.target.disabled = false;
+      }
+    });
+  }
+
+  function showThanks(attendee) {
+    const rows = [];
+    const pref = document.getElementById("preference");
+    rows.push(["Dietary", pref.options[pref.selectedIndex]?.text ?? "No restrictions"]);
+    const open = (attendee.hotel.openRequests ?? []).filter((r) => r.status === "open");
+    const latest = open.length ? open.reduce((l, r) => (r.submittedAt > l.submittedAt ? r : l)) : null;
+    if (latest) rows.push(["Hotel dates requested", `${latest.requestedCheckIn} → ${latest.requestedCheckOut}`]);
+    else if (attendee.hotel.status === "confirmed") rows.push(["Hotel dates", `${attendee.hotel.checkInDate} → ${attendee.hotel.checkOutDate}`]);
+    if (attendee.travelMode) rows.push(["Travel", attendee.travelMode === "fly" ? "Flying" : "Driving"]);
+    document.getElementById("thanks-summary").innerHTML = `
+      <div style="margin: 0 0 12px;">
+        ${rows.map(([k, v]) => `<div style="margin-bottom:6px;">${escapeHtml(k)}: <strong>${escapeHtml(v)}</strong></div>`).join("")}
+      </div>`;
+    document.querySelector(".shell").style.display = "none";
+    document.getElementById("thanks-view").style.display = "";
+    window.scrollTo(0, 0);
+  }
+
+  document.getElementById("back-to-registration").addEventListener("click", () => {
+    document.getElementById("thanks-view").style.display = "none";
+    document.querySelector(".shell").style.display = "";
+  });
 
   async function loadBranding(eventId) {
     try {
@@ -106,8 +227,8 @@
       // ADR 0033 — the org can turn flight tracking off entirely; default
       // true so older cached responses (or a failed fetch) keep the
       // section visible rather than silently hiding a real feature.
-      document.getElementById("flight-card").style.display =
-        event.flightTrackingEnabled === false ? "none" : "";
+      flightTrackingEnabled = event.flightTrackingEnabled !== false;
+      updateFlightVisibility();
       if (currentAttendee) renderHotel(currentAttendee);
     } catch (err) {
       // Branding/dates are cosmetic — a failed fetch here shouldn't block the page.
@@ -296,7 +417,8 @@
     if (!res.ok) return;
     const subEvents = await res.json();
     const card = document.getElementById("sub-events-card");
-    if (subEvents.length === 0) {
+    // ADR 0046 — org isn't giving guests a choice: no Sessions card at all.
+    if (subEvents.length === 0 || currentAttendee?.guestSessionChoiceEnabled === false) {
       card.style.display = "none";
       return;
     }
@@ -362,8 +484,11 @@
     document.getElementById("allergyDetail").value = attendee.dietary?.allergyDetail ?? "";
     renderDietaryFreeze(attendee.freeze?.meals);
     renderHotel(attendee);
+    renderTravel(attendee);
     renderFlight(attendee);
+    updateFlightVisibility();
     loadSubEvents();
+    renderSubmit(attendee);
     if (!loadMe.brandingLoaded) {
       loadMe.brandingLoaded = true;
       loadBranding(attendee.eventId);
