@@ -524,6 +524,38 @@
           <button class="btn ghost" id="save-branding">Save branding</button>
         </div>
 
+        <!-- ADR 0049 — org's own sender address (SES). Until verified,
+             email keeps going out from EventDesk exactly as before. -->
+        <div class="card" id="email-sender-card">
+          <h2>Email sender</h2>
+          <p class="hint">Send guest emails (invites, sign-in links, confirmations, hotel updates) from your own address instead of EventDesk's. Admin alerts still come from EventDesk. Until your domain is verified, nothing changes.</p>
+          <div id="email-sender-unavailable" class="notice warn" style="display:none;">Custom sender addresses aren't enabled on this EventDesk deployment yet.</div>
+          <div id="email-sender-status" style="display:none; margin-bottom: 10px; font-size: 13px;"></div>
+          <div class="field-row">
+            <div class="field"><label for="sender-from-email">From address</label><input id="sender-from-email" type="email" placeholder="events@yourcompany.com" /></div>
+            <div class="field"><label for="sender-from-name">From name</label><input id="sender-from-name" placeholder="Defaults to your display name" /></div>
+          </div>
+          <button class="btn ghost" id="save-email-sender">Save sender</button>
+          <div id="email-sender-setup" style="display:none; margin-top: 16px;">
+            <h3 style="font-size: 14px; margin: 0 0 6px;">DNS records</h3>
+            <p class="hint">Your IT team adds these to your domain's DNS. The DKIM records are required; the others are recommended. None of them change your existing SPF record.</p>
+            <table>
+              <thead><tr><th>Type</th><th>Host / name</th><th>Value</th><th></th></tr></thead>
+              <tbody id="email-sender-dns-body"></tbody>
+            </table>
+            <details style="margin-top: 12px;">
+              <summary style="cursor: pointer; font-size: 13px; font-weight: 600;">Instructions for your IT team</summary>
+              <pre id="email-sender-it-instructions" style="white-space: pre-wrap; font-size: 12px; background: var(--surface-2); padding: 12px; border-radius: var(--radius); margin: 8px 0;"></pre>
+              <button class="btn ghost" id="copy-it-instructions">Copy instructions</button>
+            </details>
+            <div style="margin-top: 14px; display: flex; gap: 8px; flex-wrap: wrap;">
+              <button class="btn" id="check-email-sender">Check verification</button>
+              <button class="btn ghost" id="toggle-email-sender"></button>
+              <button class="btn ghost" id="remove-email-sender">Remove</button>
+            </div>
+          </div>
+        </div>
+
         <div class="card">
           <h2>Approval routing</h2>
           <p class="hint">When on, a guest's change waits in "Needs sign-off" instead of applying immediately. Applies across all your events.</p>
@@ -1361,6 +1393,145 @@
       const err = await res.json();
       showNotice(err.error ?? "Could not save branding.", "error");
     }
+  });
+
+  // ADR 0049 — org custom sender address.
+  let emailSender = null;
+
+  function itInstructions(s) {
+    const lines = s.dnsRecords.map((r) => `  ${r.type.padEnd(5)} ${r.host}\n        ${r.value}\n        (${r.purpose}${r.required ? ", required" : ", recommended"})`);
+    return `We'd like our event-registration emails (sent through EventDesk) to come from ${s.fromEmail}. Please add these DNS records to ${s.domain}:
+
+${lines.join("\n\n")}
+
+Notes:
+- The DKIM CNAMEs are required. Our emails are signed with DKIM for ${s.domain}, so existing DMARC policies keep passing.
+- The MX/TXT records sit on the ${s.dnsRecords.find((r) => r.type === "MX")?.host ?? "bounce"} subdomain. They give bounces an aligned SPF domain and do NOT change our existing root SPF record.
+- Only add the _dmarc record if ${s.domain} has no DMARC record already.
+- Inbound email security (Mimecast, Proofpoint, Microsoft Defender, etc.): because these emails go to our own staff from outside our network while claiming to be from ${s.domain}, anti-spoofing / impersonation protection may hold them. Please add a bypass/allow rule for mail from ${s.fromEmail} that passes DKIM for ${s.domain}.
+
+Once the records are in, use "Check verification" in EventDesk (Organization > Email sender). DNS changes can take up to a few hours to show up. Until it's verified, emails keep coming from EventDesk's own address, so nothing breaks in the meantime.`;
+  }
+
+  function renderEmailSender(sesAvailable) {
+    const s = emailSender;
+    document.getElementById("email-sender-unavailable").style.display = sesAvailable ? "none" : "";
+    document.getElementById("save-email-sender").disabled = !sesAvailable;
+    document.getElementById("sender-from-email").value = s?.fromEmail ?? "";
+    document.getElementById("sender-from-name").value = s?.fromName ?? "";
+    const statusEl = document.getElementById("email-sender-status");
+    document.getElementById("email-sender-setup").style.display = s ? "" : "none";
+    if (!s) {
+      statusEl.style.display = "none";
+      return;
+    }
+    const live = sesAvailable && s.enabled && s.status === "verified";
+    const label = !s.enabled
+      ? { text: "Paused", note: "Guest emails are going out from EventDesk's address." }
+      : s.status === "verified"
+        ? live
+          ? { text: "Verified", note: `Guest emails are going out from ${s.fromEmail}.` }
+          : { text: "Verified", note: "Custom sending is off on this deployment, so guest emails still go out from EventDesk's address." }
+        : s.status === "failed"
+          ? { text: "Verification failed", note: "Check the DNS records below, then check again." }
+          : { text: "Waiting for DNS", note: "Guest emails keep going out from EventDesk's address until this is verified." };
+    const cls = live ? "success" : s.status === "failed" ? "error" : "warn";
+    statusEl.className = `notice ${cls}`;
+    statusEl.style.display = "";
+    statusEl.innerHTML = `<strong>${escapeHtml(label.text)}</strong> — ${escapeHtml(label.note)}${
+      s.lastCheckedAt ? ` <span style="opacity:.75;">(last checked ${escapeHtml(new Date(s.lastCheckedAt).toLocaleString())})</span>` : ""
+    }`;
+    document.getElementById("email-sender-dns-body").innerHTML = s.dnsRecords
+      .map(
+        (r, i) => `<tr>
+          <td>${escapeHtml(r.type)}</td>
+          <td style="word-break: break-all;"><code>${escapeHtml(r.host)}</code></td>
+          <td style="word-break: break-all;"><code>${escapeHtml(r.value)}</code><div class="hint" style="margin:2px 0 0;">${escapeHtml(r.purpose)}${r.required ? "" : " — recommended"}</div></td>
+          <td><button class="btn ghost" data-copy-dns="${i}">Copy</button></td>
+        </tr>`,
+      )
+      .join("");
+    document.getElementById("email-sender-it-instructions").textContent = itInstructions(s);
+    document.getElementById("toggle-email-sender").textContent = s.enabled ? "Pause (use EventDesk's address)" : "Resume";
+  }
+
+  async function loadEmailSender() {
+    const res = await api("/organization/email-sender");
+    if (!res.ok) return;
+    const data = await res.json();
+    emailSender = data.sender;
+    renderEmailSender(data.sesAvailable);
+  }
+
+  async function copyText(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+      showNotice("Copied.", "success");
+    } catch {
+      showNotice("Couldn't copy — select the text and copy it manually.", "error");
+    }
+  }
+
+  document.getElementById("email-sender-dns-body").addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-copy-dns]");
+    if (btn && emailSender) copyText(emailSender.dnsRecords[Number(btn.dataset.copyDns)].value);
+  });
+  document.getElementById("copy-it-instructions").addEventListener("click", () => {
+    if (emailSender) copyText(itInstructions(emailSender));
+  });
+
+  document.getElementById("save-email-sender").addEventListener("click", async () => {
+    const fromEmail = document.getElementById("sender-from-email").value.trim();
+    const fromName = document.getElementById("sender-from-name").value.trim() || null;
+    if (!fromEmail) return showNotice("Enter a from address.", "error");
+    if (
+      emailSender &&
+      fromEmail.split("@")[1]?.toLowerCase() !== emailSender.domain &&
+      !confirm(`Switching to a different domain replaces the DNS records for ${emailSender.domain} — your IT team will need to add new ones, and guest emails go out from EventDesk's address until the new domain is verified. Continue?`)
+    ) {
+      return;
+    }
+    const res = await api("/organization/email-sender", { method: "PUT", body: JSON.stringify({ fromEmail, fromName }) });
+    const data = await res.json();
+    if (!res.ok) return showNotice(data.error ?? "Could not save the sender.", "error");
+    emailSender = data.sender;
+    renderEmailSender(true);
+    showNotice(emailSender.status === "verified" ? "Sender saved." : "Sender saved — send the DNS records to your IT team.", "success");
+  });
+
+  document.getElementById("check-email-sender").addEventListener("click", async () => {
+    const res = await api("/organization/email-sender/check", { method: "POST" });
+    const data = await res.json();
+    if (!res.ok) return showNotice(data.error ?? "Could not check verification.", "error");
+    emailSender = data.sender;
+    renderEmailSender(true);
+    showNotice(
+      emailSender.status === "verified"
+        ? "Verified — guest emails now go out from your address."
+        : "Not verified yet. DNS changes can take a few hours; try again later.",
+      emailSender.status === "verified" ? "success" : "warn",
+    );
+  });
+
+  document.getElementById("toggle-email-sender").addEventListener("click", async () => {
+    if (!emailSender) return;
+    const res = await api("/organization/email-sender", { method: "PATCH", body: JSON.stringify({ enabled: !emailSender.enabled }) });
+    const data = await res.json();
+    if (!res.ok) return showNotice(data.error ?? "Could not update the sender.", "error");
+    emailSender = data.sender;
+    renderEmailSender(true);
+  });
+
+  document.getElementById("remove-email-sender").addEventListener("click", async () => {
+    if (!emailSender || !confirm(`Remove ${emailSender.fromEmail}? Guest emails go back to EventDesk's address immediately.`)) return;
+    const res = await api("/organization/email-sender", { method: "DELETE" });
+    if (!res.ok) {
+      const data = await res.json();
+      return showNotice(data.error ?? "Could not remove the sender.", "error");
+    }
+    emailSender = null;
+    loadEmailSender();
+    showNotice("Sender removed.", "success");
   });
 
   async function loadApprovalConfig() {
@@ -2760,6 +2931,7 @@
       loadEventList();
     } else if (page === "organization") {
       loadBranding();
+      loadEmailSender();
       loadApprovalConfig();
       loadAdmins();
       loadLocations();
