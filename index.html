@@ -28,23 +28,9 @@
     <p class="hint" style="margin: 10px 0 0;">For event admins. Guests: use the registration or sign-in link from your invitation.</p>
   </div>
 
-  <!-- ADR 0029 — always shown once an event's page loads, independent of
-       allowSelfRegistration. Matches POST /register's existing-attendee
-       branch, which never checked that toggle to begin with — only the
-       create-new-attendee branch does. Lets a CSV-imported or
-       admin-added attendee get their own link on their own schedule
-       without an admin having to individually resend it for them. -->
-  <div class="card" id="lookup-card" style="display:none;">
-    <p class="hint" style="margin:0 0 10px;">Already on the list? Enter your email to get your sign-in link.</p>
-    <div class="field">
-      <label for="lookup-email">Email</label>
-      <input id="lookup-email" type="email" placeholder="you@example.com" autocomplete="email" />
-    </div>
-    <button class="btn" id="lookup-btn" style="width:100%;">Get my sign-in link</button>
-  </div>
-
   <div class="card" id="register-card" style="display:none;">
-    <p class="hint" style="margin:0 0 10px;">New here? Register below.</p>
+    <!-- ADR 0050 — bold caps heading, first card on the page. -->
+    <p style="margin:0 0 12px; font-size:15px; font-weight:800; letter-spacing:0.04em; color:var(--ink);">NEW HERE? REGISTER BELOW</p>
     <div class="field-row">
       <div class="field"><label for="reg-first">First name</label><input id="reg-first" /></div>
       <div class="field"><label for="reg-last">Last name</label><input id="reg-last" /></div>
@@ -62,7 +48,24 @@
   </div>
 
   <div class="card" id="closed-card" style="display:none;">
-    <p class="hint" style="margin:0;">New registration for this event is by invitation only. Already on the list? Use the form above to get your sign-in link.</p>
+    <p class="hint" style="margin:0;">New registration for this event is by invitation only. Already on the list? Use the form below to get your sign-in link.</p>
+  </div>
+
+  <!-- ADR 0029 — always shown once an event's page loads, independent of
+       allowSelfRegistration. Matches POST /register's existing-attendee
+       branch, which never checked that toggle to begin with — only the
+       create-new-attendee branch does. Lets a CSV-imported or
+       admin-added attendee get their own link on their own schedule
+       without an admin having to individually resend it for them.
+       ADR 0050 — sits at the bottom, below registration (M&K asked for
+       new guests to see the registration form first). -->
+  <div class="card" id="lookup-card" style="display:none;">
+    <p class="hint" style="margin:0 0 10px;">Already Registered? To make changes to your reservation, enter email below:</p>
+    <div class="field">
+      <label for="lookup-email">Email</label>
+      <input id="lookup-email" type="email" placeholder="you@example.com" autocomplete="email" />
+    </div>
+    <button class="btn" id="lookup-btn" style="width:100%;">Get my sign-in link</button>
   </div>
 </div>
 
