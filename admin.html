@@ -429,6 +429,9 @@
             <div class="field" id="q-options-wrap">
               <label for="q-options">Options (one per line)</label>
               <textarea id="q-options" rows="3"></textarea>
+              <!-- ADR 0052 — answer that makes a self-registrant internal + billed to master. -->
+              <label for="q-internal-if" style="margin-top: 8px;">Mark registrants internal when the answer is</label>
+              <select id="q-internal-if"><option value="">— (everyone stays external)</option></select>
             </div>
             <div class="field-row">
               <div class="field">
@@ -1931,6 +1934,24 @@ Once the records are in, use "Check verification" in EventDesk (Organization > E
   }
   document.getElementById("q-type").addEventListener("change", updateQuestionOptionsVisibility);
 
+  // ADR 0052 — choices come from the options textarea as typed, so the
+  // rule can only point at a value this question will actually offer.
+  function populateInternalIfOptions(selectedValue) {
+    const select = document.getElementById("q-internal-if");
+    const options = document
+      .getElementById("q-options")
+      .value.split("\n")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const keep = options.includes(selectedValue) ? selectedValue : "";
+    select.innerHTML =
+      `<option value="">— (everyone stays external)</option>` +
+      options.map((o) => `<option value="${escapeHtml(o)}" ${o === keep ? "selected" : ""}>${escapeHtml(o)}</option>`).join("");
+  }
+  document.getElementById("q-options").addEventListener("input", () => {
+    populateInternalIfOptions(document.getElementById("q-internal-if").value);
+  });
+
   function populateVisibleIfControllerOptions(excludeId) {
     const select = document.getElementById("q-visible-if-question");
     const selectQuestions = questionsCache.filter((q) => q.fieldType === "select" && q.id !== excludeId);
@@ -1963,6 +1984,7 @@ Once the records are in, use "Check verification" in EventDesk (Organization > E
     document.getElementById("q-type").value = "text";
     document.getElementById("q-options").value = "";
     document.getElementById("q-required").checked = false;
+    populateInternalIfOptions("");
     updateQuestionOptionsVisibility();
     populateVisibleIfControllerOptions(null);
     document.getElementById("q-visible-if-question").value = "";
@@ -1980,6 +2002,7 @@ Once the records are in, use "Check verification" in EventDesk (Organization > E
     document.getElementById("q-type").value = q.fieldType;
     document.getElementById("q-options").value = q.options.join("\n");
     document.getElementById("q-required").checked = q.required;
+    populateInternalIfOptions(q.internalIfValue ?? "");
     updateQuestionOptionsVisibility();
     populateVisibleIfControllerOptions(id); // a question can't depend on its own answer
     document.getElementById("q-visible-if-question").value = q.visibleIf?.questionId ?? "";
@@ -2027,7 +2050,7 @@ Once the records are in, use "Check verification" in EventDesk (Organization > E
                 <td>${escapeHtml(q.label)}</td>
                 <td>${q.fieldType === "select" ? "Dropdown" : "Text"}</td>
                 <td>${q.required ? "Yes" : "No"}</td>
-                <td>${q.fieldType === "select" ? escapeHtml(q.options.join(", ")) : "—"}</td>
+                <td>${q.fieldType === "select" ? q.options.map((o) => escapeHtml(o) + (o === q.internalIfValue ? " <strong>(internal)</strong>" : "")).join(", ") : "—"}</td>
                 <td>${shownWhen}</td>
                 <td>
                   <button class="btn ghost edit-question-btn" data-id="${escapeHtml(q.id)}" style="padding:4px 8px; font-size:11px;">Edit</button>
@@ -2409,6 +2432,7 @@ Once the records are in, use "Check verification" in EventDesk (Organization > E
       .filter(Boolean);
     const visibleIfQuestionId = document.getElementById("q-visible-if-question").value;
     const visibleIfValue = document.getElementById("q-visible-if-value").value;
+    const internalIfValue = document.getElementById("q-internal-if").value;
 
     if (!label) return showNotice("Question label is required.", "error");
     if (fieldType === "select" && options.length === 0) {
@@ -2419,7 +2443,7 @@ Once the records are in, use "Check verification" in EventDesk (Organization > E
       label,
       fieldType,
       required,
-      ...(fieldType === "select" ? { options } : {}),
+      ...(fieldType === "select" ? { options, internalIfValue: internalIfValue || null } : {}),
       visibleIf: visibleIfQuestionId ? { questionId: visibleIfQuestionId, value: visibleIfValue } : null,
     };
 
