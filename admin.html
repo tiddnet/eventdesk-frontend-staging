@@ -101,6 +101,7 @@
       <button class="nav-link" data-page="hotel">Hotel</button>
       <button class="nav-link" data-page="dietary">Dietary</button>
       <button class="nav-link" data-page="event-settings">Event settings</button>
+      <button class="nav-link" data-page="deliverability">Mail deliverability</button>
       <hr class="nav-divider" />
       <button class="nav-link" data-page="organization">Organization</button>
       <hr class="nav-divider" />
@@ -148,6 +149,36 @@
         </div>
       </div>
 
+      <!-- ========================= Mail deliverability ========================= -->
+      <div class="page" id="page-deliverability" style="display:none;">
+        <div class="stat-row">
+          <div class="stat-tile" id="deliv-stat-total"><div class="label">Sent</div><div class="value">—</div></div>
+          <div class="stat-tile" id="deliv-stat-delivered"><div class="label">Delivered</div><div class="value">—</div></div>
+          <div class="stat-tile" id="deliv-stat-delayed"><div class="label">Delayed</div><div class="value">—</div></div>
+          <div class="stat-tile attn" id="deliv-stat-bounced"><div class="label">Bounced</div><div class="value">—</div></div>
+          <div class="stat-tile attn" id="deliv-stat-complained"><div class="label">Complaints</div><div class="value">—</div></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Messages</h2>
+            <select id="deliv-status-filter" aria-label="Filter by status">
+              <option value="">All statuses</option>
+              <option value="sent">Sent</option>
+              <option value="delayed">Delayed</option>
+              <option value="delivered">Delivered</option>
+              <option value="bounced">Bounced</option>
+              <option value="complained">Complaint</option>
+              <option value="rejected">Rejected</option>
+            </select>
+          </div>
+          <div class="panel-sub">Mail sent from your organization's own address, newest first. Delivered means the receiving server accepted it; it may still be held by a spam filter. EventDesk sign-in links for admins aren't tracked here.</div>
+          <table class="roster">
+            <thead><tr><th>To</th><th>From</th><th>Email</th><th>Status</th><th>Sending IP</th><th>Sent</th><th></th></tr></thead>
+            <tbody id="deliv-messages-body"></tbody>
+          </table>
+        </div>
+      </div>
+
       <!-- ============================== Overview ============================== -->
       <div class="page" id="page-overview" style="display:none;">
         <div class="stat-row" id="overview-stat-row">
@@ -156,6 +187,15 @@
           <div class="stat-tile" id="stat-total"><div class="label">Total Attendees</div><div class="value">—</div><div class="delta"></div></div>
           <div class="stat-tile" id="stat-dietary"><div class="label">Dietary On File</div><div class="value">—</div><div class="delta">via activity log</div></div>
           <div class="stat-tile" id="stat-subevents"><div class="label">Sub-events Published</div><div class="value">—</div><div class="delta"></div></div>
+        </div>
+
+        <div class="panel" id="overview-email-issues-panel" style="display:none;">
+          <div class="panel-head"><h2>Emails queued or not delivered</h2><span class="count-pill" id="email-issues-count-pill">0</span></div>
+          <div class="panel-sub">Queued emails go out on their own, so don't resend them. Failed ones won't retry. Mail that was sent and later bounced is under Mail deliverability.</div>
+          <table class="roster">
+            <thead><tr><th>To</th><th>Email</th><th>Status</th><th>When</th><th></th></tr></thead>
+            <tbody id="email-issues-body"></tbody>
+          </table>
         </div>
 
         <div class="card-row" id="overview-changes-row">
@@ -1111,8 +1151,10 @@
   }
 
   async function loadRoster() {
-    const res = await api(`/events/${eventId()}/attendees`);
+    const [res, emailIssues] = await Promise.all([api(`/events/${eventId()}/attendees`), fetchEmailIssues()]);
     rosterCache = await res.json();
+    // ADR 0053 — a resend here would duplicate the queued copy.
+    const queuedAttendeeIds = new Set((emailIssues ?? []).filter((f) => f.status === "queued").map((f) => f.attendeeId));
     document.getElementById("roster-count-pill").textContent = rosterCache.length;
     // ADR 0046
     const submittedCount = rosterCache.filter((a) => a.registrationSubmittedAt).length;
@@ -1136,7 +1178,9 @@
         <td>
           <button class="btn ghost edit-btn" data-attendee="${escapeHtml(a.id)}" style="padding:4px 8px; font-size:11px;">Edit</button>
           <button class="btn ghost notes-btn" data-attendee="${escapeHtml(a.id)}" style="padding:4px 8px; font-size:11px;">Notes</button>
-          <button class="btn ghost resend-invite-btn" data-attendee="${escapeHtml(a.id)}" style="padding:4px 8px; font-size:11px;">Invite link</button>
+          ${queuedAttendeeIds.has(a.id)
+            ? `<button class="btn ghost" disabled title="An email to this attendee is queued and will go out on its own." style="padding:4px 8px; font-size:11px;">Email queued</button>`
+            : `<button class="btn ghost resend-invite-btn" data-attendee="${escapeHtml(a.id)}" style="padding:4px 8px; font-size:11px;">Invite link</button>`}
           <button class="btn ghost remove-btn" data-attendee="${escapeHtml(a.id)}" data-name="${escapeHtml(a.firstName)} ${escapeHtml(a.lastName)}" style="padding:4px 8px; font-size:11px; color:var(--accent);">Remove</button>
         </td>
       </tr>`,
@@ -1216,13 +1260,16 @@
         const res = await api(`/attendees/${btn.dataset.attendee}/resend-invite`, { method: "POST" });
         const data = await res.json();
         if (res.ok) {
+          if (data.emailQueued) loadRoster();
           showNotice(
             data.devLink
               ? `Dev mode — no email sent: <a href="${escapeHtml(data.devLink)}">sign-in link</a>.`
-              : data.emailDelivered === false
+              : data.emailQueued
+                ? "The email is queued and will go out automatically, possibly not until this evening."
+                : data.emailDelivered === false
                 ? "Created, but the invite email couldn't be sent — try the resend button again."
                 : "Sign-in link resent.",
-            data.emailDelivered === false ? "error" : "success",
+            data.emailQueued ? "warn" : data.emailDelivered === false ? "error" : "success",
           );
         } else {
           showNotice(data.error ?? "Could not resend invite.", "error");
@@ -1574,10 +1621,12 @@ Once the records are in, use "Check verification" in EventDesk (Organization > E
           showNotice(
             data.devLink
               ? `Dev mode — no email sent: <a href="${escapeHtml(data.devLink)}">sign-in link</a>.`
-              : data.emailDelivered === false
+              : data.emailQueued
+                ? "The email is queued and will go out automatically, possibly not until this evening."
+                : data.emailDelivered === false
                 ? "Couldn't send the invite email — try again."
                 : "Invite link resent.",
-            data.emailDelivered === false ? "error" : "success",
+            data.emailQueued ? "warn" : data.emailDelivered === false ? "error" : "success",
           );
         } else {
           showNotice(data.error ?? "Could not resend invite.", "error");
@@ -1643,6 +1692,122 @@ Once the records are in, use "Check verification" in EventDesk (Organization > E
     });
   }
 
+  // ADR 0053
+  async function fetchEmailIssues() {
+    const res = await api(`/events/${eventId()}/email-issues`);
+    return res.ok ? res.json() : null;
+  }
+
+  function emailIssueStatus(f) {
+    const attempts = `${f.attempts} ${f.attempts === 1 ? "attempt" : "attempts"}`;
+    if (f.status === "queued") {
+      return `<strong>Queued</strong> — ${attempts}, next try ${escapeHtml(new Date(f.nextAttemptAt).toLocaleString())}`;
+    }
+    return `<strong>Failed</strong> — ${attempts}. ${escapeHtml(f.reason)}`;
+  }
+
+  async function loadOverviewEmailIssues() {
+    const rows = await fetchEmailIssues();
+    if (!rows) return;
+    document.getElementById("overview-email-issues-panel").style.display = rows.length ? "" : "none";
+    document.getElementById("email-issues-count-pill").textContent = rows.length;
+    const body = document.getElementById("email-issues-body");
+    body.innerHTML = rows
+      .map(
+        (f) => `<tr>
+          <td>${escapeHtml(f.recipient)}</td>
+          <td>${escapeHtml(f.subject)}</td>
+          <td>${emailIssueStatus(f)}</td>
+          <td>${new Date(f.createdAt).toLocaleString()}</td>
+          <td>
+            ${f.status === "failed" && f.attendeeId ? `<button class="btn ghost email-issue-resend-btn" data-id="${escapeHtml(f.id)}" data-attendee="${escapeHtml(f.attendeeId)}" style="padding:4px 8px; font-size:11px;">Send sign-in link</button>` : ""}
+            ${f.status === "failed" ? `<button class="btn ghost email-issue-dismiss-btn" data-id="${escapeHtml(f.id)}" style="padding:4px 8px; font-size:11px;">Dismiss</button>` : ""}
+          </td>
+        </tr>`,
+      )
+      .join("");
+
+    const dismiss = (id) => api(`/events/${eventId()}/email-issues/${id}/dismiss`, { method: "POST" });
+    body.querySelectorAll(".email-issue-dismiss-btn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const res = await dismiss(btn.dataset.id);
+        if (!res.ok) return showNotice("Could not dismiss that.", "error");
+        loadOverviewEmailIssues();
+      });
+    });
+    body.querySelectorAll(".email-issue-resend-btn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const res = await api(`/attendees/${btn.dataset.attendee}/resend-invite`, { method: "POST" });
+        const data = await res.json();
+        if (!res.ok) return showNotice(escapeHtml(data.error ?? "Could not send the link."), "error");
+        if (data.emailDelivered === false && !data.emailQueued) {
+          loadOverviewEmailIssues();
+          return showNotice("That didn't go through either. It's listed again here.", "error");
+        }
+        await dismiss(btn.dataset.id);
+        showNotice(data.emailQueued ? "Sign-in link queued." : "Sign-in link sent.", data.emailQueued ? "warn" : "success");
+        loadOverviewEmailIssues();
+      });
+    });
+  }
+
+  // ADR 0054
+  const DELIVERABILITY_STATUS_LABELS = {
+    sent: "Sent", delayed: "Delayed", delivered: "Delivered",
+    bounced: "Bounced", complained: "Complaint", rejected: "Rejected",
+  };
+
+  async function loadDeliverability() {
+    const status = document.getElementById("deliv-status-filter").value;
+    const res = await api(`/events/${eventId()}/mail-deliverability${status ? `?status=${encodeURIComponent(status)}` : ""}`);
+    if (!res.ok) return showNotice("Could not load mail deliverability.", "error");
+    const { summary, messages } = await res.json();
+    const total = Object.values(summary).reduce((sum, n) => sum + n, 0);
+    const tiles = {
+      "deliv-stat-total": total,
+      "deliv-stat-delivered": summary.delivered ?? 0,
+      "deliv-stat-delayed": summary.delayed ?? 0,
+      "deliv-stat-bounced": (summary.bounced ?? 0) + (summary.rejected ?? 0),
+      "deliv-stat-complained": summary.complained ?? 0,
+    };
+    for (const [id, value] of Object.entries(tiles)) document.querySelector(`#${id} .value`).textContent = value;
+
+    const body = document.getElementById("deliv-messages-body");
+    body.innerHTML = messages.length === 0
+      ? `<tr><td colspan="7" class="hint">No messages to show.</td></tr>`
+      : messages
+      .map(
+        (m) => `<tr>
+          <td>${escapeHtml(m.recipient)}</td>
+          <td>${escapeHtml(m.fromAddress)}</td>
+          <td>${escapeHtml(m.subject ?? "")}</td>
+          <td><strong>${escapeHtml(DELIVERABILITY_STATUS_LABELS[m.status] ?? m.status)}</strong>${m.statusDetail ? ` — ${escapeHtml(m.statusDetail)}` : ""}</td>
+          <td>${escapeHtml(m.sendingIp ?? "—")}</td>
+          <td>${new Date(m.sentAt).toLocaleString()}</td>
+          <td><button class="btn ghost deliv-history-btn" data-id="${escapeHtml(m.id)}" style="padding:4px 8px; font-size:11px;">History</button></td>
+        </tr>`,
+      )
+      .join("");
+
+    body.querySelectorAll(".deliv-history-btn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const row = btn.closest("tr");
+        if (row.nextElementSibling?.classList.contains("deliv-history-row")) return row.nextElementSibling.remove();
+        const res = await api(`/events/${eventId()}/mail-deliverability/${encodeURIComponent(btn.dataset.id)}/events`);
+        if (!res.ok) return showNotice("Could not load that history.", "error");
+        const events = await res.json();
+        row.insertAdjacentHTML(
+          "afterend",
+          `<tr class="deliv-history-row"><td colspan="7" class="hint">${events
+            .map((e) => `${escapeHtml(new Date(e.occurredAt).toLocaleString())} — ${escapeHtml(e.eventType)}${e.detail ? `: ${escapeHtml(e.detail)}` : ""}`)
+            .join("<br>")}</td></tr>`,
+        );
+      });
+    });
+  }
+
+  document.getElementById("deliv-status-filter").addEventListener("change", loadDeliverability);
+
   async function loadOverviewUnclaimedAdmins() {
     const res = await api("/admins");
     if (!res.ok) return;
@@ -1676,10 +1841,12 @@ Once the records are in, use "Check verification" in EventDesk (Organization > E
       showNotice(
         data.devLink
           ? `Invited. Dev mode — no email sent: <a href="${data.devLink}">sign-in link</a>.`
-          : data.emailDelivered === false
+          : data.emailQueued
+            ? "The email is queued and will go out automatically, possibly not until this evening."
+            : data.emailDelivered === false
             ? "Invited, but the invite email couldn't be sent — they can request a sign-in link themselves from the sign-in page."
             : "Invite sent.",
-        data.emailDelivered === false ? "error" : "success",
+        data.emailQueued ? "warn" : data.emailDelivered === false ? "error" : "success",
       );
       document.getElementById("invite-email").value = "";
       loadAdmins();
@@ -2519,10 +2686,12 @@ Once the records are in, use "Check verification" in EventDesk (Organization > E
       showNotice(
         data.devLink
           ? `Attendee added. Dev mode — no email sent: <a href="${data.devLink}">sign-in link</a>.`
-          : data.emailDelivered === false
+          : data.emailQueued
+            ? "The email is queued and will go out automatically, possibly not until this evening."
+            : data.emailDelivered === false
             ? "Attendee added, but the invite email couldn't be sent — use the invite-link button in the roster to try again."
             : "Attendee added — invite sent.",
-        data.emailDelivered === false ? "error" : "success",
+        data.emailQueued ? "warn" : data.emailDelivered === false ? "error" : "success",
       );
       resetAttendeeForm();
       loadRoster();
@@ -2930,6 +3099,7 @@ Once the records are in, use "Check verification" in EventDesk (Organization > E
     if (page === "overview") {
       loadOverviewActivity().then(computeOverviewStats);
       loadOverviewUnclaimedAdmins();
+      loadOverviewEmailIssues();
       loadEventNotes();
     } else if (page === "attendees") {
       loadChanges();
@@ -2951,6 +3121,8 @@ Once the records are in, use "Check verification" in EventDesk (Organization > E
       loadFieldFreeze();
       loadRegistrationQuestions();
       loadLocationTravel();
+    } else if (page === "deliverability") {
+      loadDeliverability();
     } else if (page === "events") {
       loadEventList();
     } else if (page === "organization") {

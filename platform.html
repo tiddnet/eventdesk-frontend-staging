@@ -128,10 +128,12 @@
           showNotice(
             data.devLink
               ? `Dev mode — no email sent: <a href="${escapeHtml(data.devLink)}">${escapeHtml(btn.dataset.email)}'s sign-in link</a>.`
-              : data.emailDelivered === false
+              : data.emailQueued
+                ? "The email is queued and will go out automatically, possibly not until this evening."
+                : data.emailDelivered === false
                 ? `Couldn't send the sign-in link to ${escapeHtml(btn.dataset.email)} — try again in a moment.`
                 : `Sign-in link resent to ${escapeHtml(btn.dataset.email)}.`,
-            data.emailDelivered === false ? "error" : "success",
+            data.emailQueued ? "warn" : data.emailDelivered === false ? "error" : "success",
           );
         } else {
           showNotice(data.error ?? "Could not resend link.", "error");
@@ -246,10 +248,12 @@
         showNotice(
           data.devLink
             ? `"${escapeHtml(name)}" created. Dev mode — no email sent to the new admin: <a href="${escapeHtml(data.devLink)}">their sign-in link</a>.`
-            : data.emailDelivered === false
+            : data.emailQueued
+              ? "The email is queued and will go out automatically, possibly not until this evening."
+              : data.emailDelivered === false
               ? `"${escapeHtml(name)}" created, but the invite email to ${escapeHtml(adminEmail)} couldn't be sent — use the resend-link button on the org list.`
               : `"${escapeHtml(name)}" created — an invite was sent to ${escapeHtml(adminEmail)}.`,
-          data.emailDelivered === false ? "error" : "success",
+          data.emailQueued ? "warn" : data.emailDelivered === false ? "error" : "success",
         );
         document.getElementById("org-name").value = "";
         document.getElementById("org-admin-email").value = "";

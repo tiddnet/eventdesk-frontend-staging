@@ -111,6 +111,9 @@
         `Dev mode — no email sent. <a href="${data.devLink}">Click here to continue</a>.`,
         "warn",
       );
+    } else if (data.emailQueued) {
+      // ADR 0053 — not sent yet, but it will retry on its own.
+      showNotice("We're sending a lot of email right now. Yours is queued and will arrive later, so there's no need to ask again.", "warn");
     } else if (data.emailDelivered === false) {
       // ADR 0023 — Resend was configured but rejected the send (e.g. an
       // unverified-domain restriction, a bad address). The underlying
