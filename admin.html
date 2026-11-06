@@ -170,11 +170,16 @@
               <option value="complained">Complaint</option>
               <option value="rejected">Rejected</option>
             </select>
+            <select id="deliv-provider-filter" aria-label="Filter by sending service">
+              <option value="">All services</option>
+              <option value="ses">Amazon SES</option>
+              <option value="resend">Resend</option>
+            </select>
           </div>
-          <div class="panel-sub">Mail sent from your organization's own address, newest first. Delivered means the receiving server accepted it; it may still be held by a spam filter. EventDesk sign-in links for admins aren't tracked here.</div>
+          <div class="panel-sub">Mail for this event and your organization, newest first. Delivered means the receiving server accepted it; it may still be held by a spam filter. Resend doesn't report a sending IP.</div>
           <div style="overflow-x:auto;">
             <table class="roster">
-              <thead><tr><th>To</th><th>From</th><th>Email</th><th>Status</th><th>Sending IP</th><th>Sent</th><th></th></tr></thead>
+              <thead><tr><th>To</th><th>From</th><th>Sent via</th><th>Email</th><th>Status</th><th>Sending IP</th><th>Sent</th><th></th></tr></thead>
               <tbody id="deliv-messages-body"></tbody>
             </table>
           </div>
@@ -1758,10 +1763,14 @@ Once the records are in, use "Check verification" in EventDesk (Organization > E
     sent: "Sent", delayed: "Delayed", delivered: "Delivered",
     bounced: "Bounced", complained: "Complaint", rejected: "Rejected",
   };
+  // ADR 0055
+  const DELIVERABILITY_PROVIDER_LABELS = { ses: "Amazon SES", resend: "Resend" };
 
   async function loadDeliverability() {
     const status = document.getElementById("deliv-status-filter").value;
-    const res = await api(`/events/${eventId()}/mail-deliverability${status ? `?status=${encodeURIComponent(status)}` : ""}`);
+    const provider = document.getElementById("deliv-provider-filter").value;
+    const query = new URLSearchParams({ ...(status ? { status } : {}), ...(provider ? { provider } : {}) }).toString();
+    const res = await api(`/events/${eventId()}/mail-deliverability${query ? `?${query}` : ""}`);
     if (!res.ok) return showNotice("Could not load mail deliverability.", "error");
     const { summary, messages } = await res.json();
     const total = Object.values(summary).reduce((sum, n) => sum + n, 0);
@@ -1776,12 +1785,13 @@ Once the records are in, use "Check verification" in EventDesk (Organization > E
 
     const body = document.getElementById("deliv-messages-body");
     body.innerHTML = messages.length === 0
-      ? `<tr><td colspan="7" class="hint">No messages to show.</td></tr>`
+      ? `<tr><td colspan="8" class="hint">No messages to show.</td></tr>`
       : messages
       .map(
         (m) => `<tr>
           <td>${escapeHtml(m.recipient)}</td>
           <td>${escapeHtml(m.fromAddress)}</td>
+          <td>${escapeHtml(DELIVERABILITY_PROVIDER_LABELS[m.provider] ?? m.provider)}</td>
           <td>${escapeHtml(m.subject ?? "")}</td>
           <td><strong>${escapeHtml(DELIVERABILITY_STATUS_LABELS[m.status] ?? m.status)}</strong>${m.statusDetail ? ` — ${escapeHtml(m.statusDetail)}` : ""}</td>
           <td>${escapeHtml(m.sendingIp ?? "—")}</td>
@@ -1800,7 +1810,7 @@ Once the records are in, use "Check verification" in EventDesk (Organization > E
         const events = await res.json();
         row.insertAdjacentHTML(
           "afterend",
-          `<tr class="deliv-history-row"><td colspan="7" class="hint">${events
+          `<tr class="deliv-history-row"><td colspan="8" class="hint">${events
             .map((e) => `${escapeHtml(new Date(e.occurredAt).toLocaleString())} — ${escapeHtml(e.eventType)}${e.detail ? `: ${escapeHtml(e.detail)}` : ""}`)
             .join("<br>")}</td></tr>`,
         );
@@ -1809,6 +1819,7 @@ Once the records are in, use "Check verification" in EventDesk (Organization > E
   }
 
   document.getElementById("deliv-status-filter").addEventListener("change", loadDeliverability);
+  document.getElementById("deliv-provider-filter").addEventListener("change", loadDeliverability);
 
   async function loadOverviewUnclaimedAdmins() {
     const res = await api("/admins");
