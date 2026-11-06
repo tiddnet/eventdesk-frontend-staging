@@ -172,10 +172,12 @@
             </select>
           </div>
           <div class="panel-sub">Mail sent from your organization's own address, newest first. Delivered means the receiving server accepted it; it may still be held by a spam filter. EventDesk sign-in links for admins aren't tracked here.</div>
-          <table class="roster">
-            <thead><tr><th>To</th><th>From</th><th>Email</th><th>Status</th><th>Sending IP</th><th>Sent</th><th></th></tr></thead>
-            <tbody id="deliv-messages-body"></tbody>
-          </table>
+          <div style="overflow-x:auto;">
+            <table class="roster">
+              <thead><tr><th>To</th><th>From</th><th>Email</th><th>Status</th><th>Sending IP</th><th>Sent</th><th></th></tr></thead>
+              <tbody id="deliv-messages-body"></tbody>
+            </table>
+          </div>
         </div>
       </div>
 
