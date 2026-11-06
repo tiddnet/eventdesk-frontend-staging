@@ -3090,7 +3090,7 @@ Once the records are in, use "Check verification" in EventDesk (Organization > E
     document.querySelector("#stat-subevents .delta").textContent = subEvents.length - published > 0 ? `${subEvents.length - published} PDF pending` : "all published";
   }
 
-  const NAV_PAGES = ["events", "overview", "attendees", "subevents", "hotel", "dietary", "event-settings", "organization"];
+  const NAV_PAGES = ["events", "overview", "attendees", "subevents", "hotel", "dietary", "event-settings", "deliverability", "organization"];
   let currentPage = "overview";
 
   function loadPageData(page) {
