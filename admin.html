@@ -1186,6 +1186,11 @@
       : d.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
   }
 
+  // Two fixed lines so every pending row has the same shape.
+  function waitingLabel(firstName, sentAt) {
+    return `Waiting on ${escapeHtml(firstName)} to confirm<br>Sent ${escapeHtml(sentLabel(sentAt))}`;
+  }
+
   async function loadDuplicates() {
     const res = await api(`/events/${eventId()}/duplicates`);
     if (!res.ok) return;
@@ -1219,7 +1224,7 @@
             <strong>${escapeHtml(p.attendee?.firstName ?? "")} ${escapeHtml(p.attendee?.lastName ?? "")}</strong>${p.source === "registration" ? " (same name and cell)" : ""}.
             It can't sign in until they confirm it from ${escapeHtml(p.attendee?.email ?? "their address")}.</div>
           <div style="flex:0 1 340px; display:flex; flex-direction:column; gap:6px; align-items:flex-start;">
-            <span class="hint pending-sent" data-id="${escapeHtml(p.id)}">${p.confirmSentAt ? `Waiting on ${escapeHtml(p.attendee?.firstName ?? "them")} to confirm · sent ${escapeHtml(sentLabel(p.confirmSentAt))}` : "No confirmation sent yet"}</span>
+            <span class="hint pending-sent" data-id="${escapeHtml(p.id)}">${p.confirmSentAt ? waitingLabel(p.attendee?.firstName ?? "them", p.confirmSentAt) : "No confirmation sent yet"}</span>
             <div style="display:flex; gap:8px; flex-wrap:wrap;">
               <button class="btn ghost pending-confirm" data-id="${escapeHtml(p.id)}" data-name="${escapeHtml(p.attendee?.firstName ?? "them")}" type="button">${p.confirmSentAt ? "Send again anyway" : "Send confirmation"}</button>
               <button class="btn ghost pending-remove" data-id="${escapeHtml(p.id)}" type="button">Remove</button>
@@ -1240,7 +1245,7 @@
       const res = await api(`/attendee-emails/${btn.dataset.id}/send-confirm`, { method: "POST" });
       const data = await res.json().catch(() => ({}));
       const label = document.querySelector(`.pending-sent[data-id="${btn.dataset.id}"]`);
-      if (data.confirmSentAt && label) label.textContent = `Waiting on ${btn.dataset.name} to confirm · sent ${sentLabel(data.confirmSentAt)}`;
+      if (data.confirmSentAt && label) label.innerHTML = waitingLabel(btn.dataset.name, data.confirmSentAt);
       if (res.ok) {
         btn.textContent = "Sent";
         showNotice("Confirmation sent.", "success");
