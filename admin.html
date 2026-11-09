@@ -1178,6 +1178,14 @@
     </div>`;
   }
 
+  function sentLabel(when) {
+    const d = new Date(when);
+    const sameDay = d.toDateString() === new Date().toDateString();
+    return sameDay
+      ? `today at ${d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
+      : d.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  }
+
   async function loadDuplicates() {
     const res = await api(`/events/${eventId()}/duplicates`);
     if (!res.ok) return;
@@ -1209,8 +1217,9 @@
               claim: "was added by",
             }[p.source] ?? "is waiting on"}
             <strong>${escapeHtml(p.attendee?.firstName ?? "")} ${escapeHtml(p.attendee?.lastName ?? "")}</strong>${p.source === "registration" ? " (same name and cell)" : ""}.
-            It can't sign in until they confirm it from ${escapeHtml(p.attendee?.email ?? "their address")}.</div>
-          <button class="btn ghost pending-confirm" data-id="${escapeHtml(p.id)}" type="button">Send them a confirmation</button>
+            It can't sign in until they confirm it from ${escapeHtml(p.attendee?.email ?? "their address")}.
+            <br><span class="hint pending-sent" data-id="${escapeHtml(p.id)}">${p.confirmSentAt ? `Confirmation sent ${escapeHtml(sentLabel(p.confirmSentAt))}` : "No confirmation sent yet"}</span></div>
+          <button class="btn ghost pending-confirm" data-id="${escapeHtml(p.id)}" type="button">${p.confirmSentAt ? "Send again" : "Send confirmation"}</button>
           <button class="btn ghost pending-remove" data-id="${escapeHtml(p.id)}" type="button">Remove</button>
         </div>`),
     ].join("");
@@ -1222,8 +1231,20 @@
     }));
     document.querySelectorAll(".dup-review").forEach((btn) => btn.addEventListener("click", () => openMergePreview(Number(btn.dataset.i))));
     document.querySelectorAll(".pending-confirm").forEach((btn) => btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      btn.textContent = "Sending…";
       const res = await api(`/attendee-emails/${btn.dataset.id}/send-confirm`, { method: "POST" });
-      showNotice(res.ok ? "Confirmation sent." : "Couldn't send the confirmation.", res.ok ? "success" : "error");
+      const data = await res.json().catch(() => ({}));
+      const label = document.querySelector(`.pending-sent[data-id="${btn.dataset.id}"]`);
+      if (data.confirmSentAt && label) label.textContent = `Confirmation sent ${sentLabel(data.confirmSentAt)}`;
+      if (res.ok) {
+        btn.textContent = "Sent";
+        showNotice("Confirmation sent.", "success");
+      } else {
+        btn.textContent = "Send again";
+        btn.disabled = res.status === 429;
+        showNotice(escapeHtml(data.error ?? "Couldn't send the confirmation."), "error");
+      }
     }));
     document.querySelectorAll(".pending-remove").forEach((btn) => btn.addEventListener("click", async () => {
       await api(`/attendee-emails/${btn.dataset.id}`, { method: "DELETE" });
