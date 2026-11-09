@@ -1218,8 +1218,8 @@
             }[p.source] ?? "is waiting on"}
             <strong>${escapeHtml(p.attendee?.firstName ?? "")} ${escapeHtml(p.attendee?.lastName ?? "")}</strong>${p.source === "registration" ? " (same name and cell)" : ""}.
             It can't sign in until they confirm it from ${escapeHtml(p.attendee?.email ?? "their address")}.
-            <br><span class="hint pending-sent" data-id="${escapeHtml(p.id)}">${p.confirmSentAt ? `Confirmation sent ${escapeHtml(sentLabel(p.confirmSentAt))}` : "No confirmation sent yet"}</span></div>
-          <button class="btn ghost pending-confirm" data-id="${escapeHtml(p.id)}" type="button">${p.confirmSentAt ? "Send again" : "Send confirmation"}</button>
+            <br><span class="hint pending-sent" data-id="${escapeHtml(p.id)}">${p.confirmSentAt ? `Waiting on ${escapeHtml(p.attendee?.firstName ?? "them")} to confirm · sent ${escapeHtml(sentLabel(p.confirmSentAt))}` : "No confirmation sent yet"}</span></div>
+          <button class="btn ghost pending-confirm" data-id="${escapeHtml(p.id)}" data-name="${escapeHtml(p.attendee?.firstName ?? "them")}" type="button">${p.confirmSentAt ? "Send again anyway" : "Send confirmation"}</button>
           <button class="btn ghost pending-remove" data-id="${escapeHtml(p.id)}" type="button">Remove</button>
         </div>`),
     ].join("");
@@ -1236,12 +1236,12 @@
       const res = await api(`/attendee-emails/${btn.dataset.id}/send-confirm`, { method: "POST" });
       const data = await res.json().catch(() => ({}));
       const label = document.querySelector(`.pending-sent[data-id="${btn.dataset.id}"]`);
-      if (data.confirmSentAt && label) label.textContent = `Confirmation sent ${sentLabel(data.confirmSentAt)}`;
+      if (data.confirmSentAt && label) label.textContent = `Waiting on ${btn.dataset.name} to confirm · sent ${sentLabel(data.confirmSentAt)}`;
       if (res.ok) {
         btn.textContent = "Sent";
         showNotice("Confirmation sent.", "success");
       } else {
-        btn.textContent = "Send again";
+        btn.textContent = "Send again anyway";
         btn.disabled = res.status === 429;
         showNotice(escapeHtml(data.error ?? "Couldn't send the confirmation."), "error");
       }
