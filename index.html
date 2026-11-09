@@ -376,12 +376,39 @@
     }
   }
 
+  // ADR 0056 — a confirm link (add a sign-in address, or a claimed work
+  // address). Applying it signs the person in, like a sign-in link.
+  async function confirmEmailFromUrl() {
+    const token = new URLSearchParams(window.location.search).get("confirmEmail");
+    if (!token) return false;
+    showNotice("Confirming…", "warn");
+    try {
+      const res = await fetch(`${API_BASE_URL}/auth/confirm-email`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showNotice(data.error || "That link is invalid or expired.", "error");
+        return true;
+      }
+      localStorage.setItem("eventdesk_session", data.sessionToken);
+      localStorage.setItem("eventdesk_role", data.role);
+      window.location.href = `me.html?confirmed=${encodeURIComponent(data.outcome)}`;
+    } catch (err) {
+      showNotice("That link is invalid or expired.", "error");
+    }
+    return true;
+  }
+
   document.getElementById("submit-btn").addEventListener("click", requestAdminMagicLink);
   document.getElementById("email").addEventListener("keydown", (e) => {
     if (e.key === "Enter") requestAdminMagicLink();
   });
 
   (async () => {
+    if (await confirmEmailFromUrl()) return;
     const handledToken = await verifyFromUrl();
     if (handledToken) return;
 

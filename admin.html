@@ -268,6 +268,13 @@
           <button class="btn ghost" id="cancel-edit-attendee" style="display:none;">Cancel edit</button>
         </div>
 
+        <!-- ADR 0056 — shown only when there's something to look at. -->
+        <div class="panel" id="duplicates-panel" style="display:none;">
+          <div class="panel-head"><h2>Possible duplicates</h2><span class="count-pill" id="duplicates-count-pill">0</span></div>
+          <div class="panel-sub">Rows that share a cell number or a name. Nothing changes until you merge. After a merge, the person confirms their other address from their send-to address before it works for signing in.</div>
+          <div class="panel-body" id="duplicates-body"></div>
+        </div>
+
         <div class="panel">
           <div class="panel-head">
             <div><h2 style="display:inline;">Roster</h2> <span class="count-pill" id="roster-count-pill">0</span> <span class="hint" id="roster-submitted-summary" style="margin-left:8px;"></span></div>
@@ -1157,9 +1164,141 @@
     return `${status}${unknown}`;
   }
 
+  // ADR 0056 — Possible duplicates and merge.
+  const PERSONAL_DOMAINS = /@(gmail|googlemail|yahoo|ymail|hotmail|outlook|live|msn|aol|icloud|me|mac|comcast|att|sbcglobal|verizon|charter|cox|proton|protonmail)\.[a-z.]+$/i;
+  const deliverable = (e) => /^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(e);
+  let duplicatesCache = { pairs: [], pending: [] };
+
+  function personCell(p) {
+    const hotel = p.checkIn ? `Hotel ${escapeHtml(p.checkIn)} to ${escapeHtml(p.checkOut)}` : "No hotel";
+    return `<div style="flex:1; min-width:220px;">
+      <strong>${escapeHtml(p.firstName)} ${escapeHtml(p.lastName)}</strong><br>
+      <span>${escapeHtml(p.email)}</span><br>
+      <span class="hint">${p.submittedAt ? "Registered" : "Not registered"} · ${hotel}${p.phoneLast4 ? ` · cell ••• ${escapeHtml(p.phoneLast4)}` : ""}</span>
+    </div>`;
+  }
+
+  async function loadDuplicates() {
+    const res = await api(`/events/${eventId()}/duplicates`);
+    if (!res.ok) return;
+    duplicatesCache = await res.json();
+    const { pairs, pending } = duplicatesCache;
+    const panel = document.getElementById("duplicates-panel");
+    panel.style.display = pairs.length || pending.length ? "" : "none";
+    document.getElementById("duplicates-count-pill").textContent = pairs.length + pending.length;
+    const why = (r) => [r.sameName && "same name", r.samePhone && "same cell", r.sameMailbox && "same mailbox name"].filter(Boolean).join(", ");
+    document.getElementById("duplicates-body").innerHTML = [
+      ...pairs.map((p, i) => `
+        <div class="dup-item" style="border-top:1px solid var(--border); padding:12px 0;">
+          <div style="display:flex; gap:10px; align-items:baseline; flex-wrap:wrap; margin-bottom:8px;">
+            <span class="badge ${p.ready ? "" : "vip"}">${p.ready ? "Ready to merge" : "Needs a decision"}</span>
+            <span class="hint">Matched on ${escapeHtml(why(p.reasons))}</span>
+          </div>
+          <div style="display:flex; gap:16px; flex-wrap:wrap;">${personCell(p.a)}${personCell(p.b)}</div>
+          <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px;">
+            <button class="btn dup-review" data-i="${i}" type="button">Review merge</button>
+            <button class="btn ghost dup-dismiss" data-i="${i}" type="button">Not the same person</button>
+          </div>
+          <div class="dup-preview" id="dup-preview-${i}"></div>
+        </div>`),
+      ...pending.map((p) => `
+        <div style="border-top:1px solid var(--border); padding:12px 0; display:flex; gap:12px; flex-wrap:wrap; align-items:center;">
+          <div style="flex:1; min-width:240px;"><strong>${escapeHtml(p.email)}</strong> was used to register as
+            <strong>${escapeHtml(p.attendee?.firstName ?? "")} ${escapeHtml(p.attendee?.lastName ?? "")}</strong> (same name and cell).
+            It can't sign in until they confirm it from ${escapeHtml(p.attendee?.email ?? "their address")}.</div>
+          <button class="btn ghost pending-confirm" data-id="${escapeHtml(p.id)}" type="button">Send them a confirmation</button>
+          <button class="btn ghost pending-remove" data-id="${escapeHtml(p.id)}" type="button">Remove</button>
+        </div>`),
+    ].join("");
+
+    document.querySelectorAll(".dup-dismiss").forEach((btn) => btn.addEventListener("click", async () => {
+      const p = pairs[btn.dataset.i];
+      await api(`/events/${eventId()}/duplicates/dismiss`, { method: "POST", body: JSON.stringify({ attendeeAId: p.a.id, attendeeBId: p.b.id }) });
+      loadDuplicates();
+    }));
+    document.querySelectorAll(".dup-review").forEach((btn) => btn.addEventListener("click", () => openMergePreview(Number(btn.dataset.i))));
+    document.querySelectorAll(".pending-confirm").forEach((btn) => btn.addEventListener("click", async () => {
+      const res = await api(`/attendee-emails/${btn.dataset.id}/send-confirm`, { method: "POST" });
+      showNotice(res.ok ? "Confirmation sent." : "Couldn't send the confirmation.", res.ok ? "success" : "error");
+    }));
+    document.querySelectorAll(".pending-remove").forEach((btn) => btn.addEventListener("click", async () => {
+      await api(`/attendee-emails/${btn.dataset.id}`, { method: "DELETE" });
+      loadDuplicates();
+    }));
+  }
+
+  async function openMergePreview(i, keepId) {
+    const p = duplicatesCache.pairs[i];
+    // Default: keep the row that has the registration (then the one with a hotel).
+    const score = (x) => (x.submittedAt ? 2 : 0) + (x.checkIn ? 1 : 0);
+    const keep = keepId ? [p.a, p.b].find((x) => x.id === keepId) : score(p.b) > score(p.a) ? p.b : p.a;
+    const from = keep.id === p.a.id ? p.b : p.a;
+    const res = await api(`/events/${eventId()}/merge-preview?keep=${encodeURIComponent(keep.id)}&from=${encodeURIComponent(from.id)}`);
+    const box = document.getElementById(`dup-preview-${i}`);
+    if (!res.ok) {
+      box.innerHTML = `<p class="hint">${escapeHtml((await res.json()).error ?? "Can't preview this merge.")}</p>`;
+      return;
+    }
+    const pv = await res.json();
+    const addresses = [pv.keep.email, pv.from.email].filter(deliverable);
+    const work = addresses.find((e) => !PERSONAL_DOMAINS.test(e)) ?? addresses[0];
+    const conflictRow = (c, n) => {
+      const name = c.field === "answer" ? `ans-${c.questionId}` : c.field;
+      return `<tr><td>${escapeHtml(c.field === "answer" ? "Answer" : c.field)}</td>
+        <td><label><input type="radio" name="res-${i}-${n}" data-key="${escapeHtml(name)}" value="keep" checked> ${escapeHtml(c.keep)}</label></td>
+        <td><label><input type="radio" name="res-${i}-${n}" data-key="${escapeHtml(name)}" value="from"> ${escapeHtml(c.from)}</label></td></tr>`;
+    };
+    box.innerHTML = `
+      <div style="background:var(--bg); border-radius:var(--radius); padding:12px 14px; margin-top:10px;">
+        <p style="margin:0 0 8px;"><strong>Keep the data from:</strong>
+          <label><input type="radio" name="keep-${i}" value="${escapeHtml(pv.keep.id)}" checked> ${escapeHtml(pv.keep.email)}</label>
+          <label style="margin-left:12px;"><input type="radio" name="keep-${i}" value="${escapeHtml(pv.from.id)}"> ${escapeHtml(pv.from.email)}</label></p>
+        <p style="margin:0 0 8px;"><strong>Send event emails to:</strong>
+          ${addresses.map((e) => `<label style="margin-right:12px;"><input type="radio" name="sendto-${i}" value="${escapeHtml(e)}" ${e === work ? "checked" : ""}> ${escapeHtml(e)}</label>`).join("")}</p>
+        ${pv.droppedAddress ? `<p class="hint" style="margin:0 0 8px;">${escapeHtml(pv.droppedAddress)} is incomplete, so it won't be kept.</p>` : ""}
+        <table class="roster" style="margin:8px 0;">
+          <thead><tr><th>Field</th><th>${escapeHtml(pv.keep.email)} (kept)</th><th>${escapeHtml(pv.from.email)}</th></tr></thead>
+          <tbody>${pv.fields.filter((f) => f.keep || f.from).map((f) => `<tr><td>${escapeHtml(f.label)}</td><td>${escapeHtml(f.keep || "—")}</td><td>${escapeHtml(f.from || "—")}</td></tr>`).join("")}</tbody>
+        </table>
+        ${pv.conflicts.length ? `
+          <p style="margin:8px 0 4px;"><strong>These differ — choose which to keep:</strong></p>
+          <table class="roster"><tbody>${pv.conflicts.map(conflictRow).join("")}</tbody></table>` : `<p class="hint" style="margin:8px 0;">No differences to resolve. Anything only one row has is kept.</p>`}
+        <p class="hint" style="margin:8px 0;">Change history, notes and hotel requests from both rows are kept. The other address works for signing in once the person confirms it.</p>
+        <button class="btn merge-go" type="button">Merge into one attendee</button>
+      </div>`;
+    box.querySelectorAll(`input[name="keep-${i}"]`).forEach((r) => r.addEventListener("change", () => openMergePreview(i, r.value)));
+    box.querySelector(".merge-go").addEventListener("click", async (e) => {
+      e.target.disabled = true;
+      const resolutions = { answers: {} };
+      box.querySelectorAll("input[data-key]:checked").forEach((r) => {
+        if (r.dataset.key.startsWith("ans-")) resolutions.answers[r.dataset.key.slice(4)] = r.value;
+        else resolutions[r.dataset.key] = r.value;
+      });
+      const sendTo = box.querySelector(`input[name="sendto-${i}"]:checked`)?.value;
+      const res = await api(`/events/${eventId()}/merge`, {
+        method: "POST",
+        body: JSON.stringify({ keepId: pv.keep.id, fromId: pv.from.id, sendTo, resolutions }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showNotice(escapeHtml(data.error ?? "Merge failed."), "error");
+        e.target.disabled = false;
+        return;
+      }
+      showNotice(
+        data.signInAddress
+          ? `Merged. We asked ${escapeHtml(sendTo)} to confirm ${escapeHtml(data.signInAddress)} for signing in.`
+          : "Merged.",
+        "success",
+      );
+      loadRoster();
+    });
+  }
+
   async function loadRoster() {
     const [res, emailIssues] = await Promise.all([api(`/events/${eventId()}/attendees`), fetchEmailIssues()]);
     rosterCache = await res.json();
+    loadDuplicates();
     // ADR 0053 — a resend here would duplicate the queued copy.
     const queuedAttendeeIds = new Set((emailIssues ?? []).filter((f) => f.status === "queued").map((f) => f.attendeeId));
     document.getElementById("roster-count-pill").textContent = rosterCache.length;

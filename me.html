@@ -16,6 +16,13 @@
 
   <div id="notice"></div>
 
+  <!-- ADR 0056 — where event emails go, other sign-in addresses, and the
+       optional "use your work address" prompt. -->
+  <div class="card" id="email-card" style="display:none;">
+    <h2>Email</h2>
+    <div id="email-section"></div>
+  </div>
+
   <div class="card">
     <h2>Dietary preference</h2>
     <div id="dietary-freeze-banner"></div>
@@ -474,6 +481,54 @@
     }
   }
 
+  function renderEmail(attendee) {
+    document.getElementById("email-card").style.display = "";
+    const el = document.getElementById("email-section");
+    const others = attendee.signInAddresses ?? [];
+    const otherRows = others
+      .map((a) => `<li>${escapeHtml(a.email)}${a.status === "pending" ? ` <span class="hint">— waiting for you to confirm from ${escapeHtml(attendee.email)}</span>` : ""}</li>`)
+      .join("");
+    el.innerHTML = `
+      <p style="margin:0 0 8px;">Event emails go to <strong>${escapeHtml(attendee.email)}</strong>.</p>
+      ${others.length ? `<p class="hint" style="margin:0 0 4px;">You can also sign in with:</p><ul style="margin:0 0 12px;">${otherRows}</ul>` : ""}
+      ${attendee.offerClaim ? `
+        <div class="notice warn" style="margin:12px 0;">
+          <p style="margin:0 0 8px;">Do you have a work email? Using it keeps event updates in one place. Your current address still works for signing in.</p>
+          <label for="claim-email" class="hint">Work email</label>
+          <input id="claim-email" type="email" value="${escapeHtml(attendee.claimSuggestion ?? "")}" style="width:100%; max-width:360px;" />
+          <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">
+            <button class="btn" id="claim-send" type="button">Send confirmation</button>
+            <button class="btn ghost" id="claim-dismiss" type="button">I don't have a work email</button>
+          </div>
+        </div>` : ""}
+      <details>
+        <summary class="hint">Add another sign-in address</summary>
+        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">
+          <label for="add-address" class="hint" style="width:100%;">We'll ask you to confirm it from ${escapeHtml(attendee.email)}.</label>
+          <input id="add-address" type="email" style="flex:1; min-width:200px;" />
+          <button class="btn ghost" id="add-address-send" type="button">Add</button>
+        </div>
+      </details>
+    `;
+    const post = async (path, body) => api(path, { method: "POST", body: JSON.stringify(body ?? {}) });
+    document.getElementById("claim-send")?.addEventListener("click", async () => {
+      const email = document.getElementById("claim-email").value.trim();
+      const res = await post("/me/claim-email", { email });
+      if (res.ok) showNotice(`If ${escapeHtml(email)} can receive email, a confirmation is on its way. Open it from that inbox to finish.`, "success");
+      else showNotice(escapeHtml((await res.json()).error ?? "Something went wrong."), "error");
+    });
+    document.getElementById("claim-dismiss")?.addEventListener("click", async () => {
+      await post("/me/claim-dismiss");
+      await loadMe();
+    });
+    document.getElementById("add-address-send").addEventListener("click", async () => {
+      const email = document.getElementById("add-address").value.trim();
+      const res = await post("/me/sign-in-addresses", { email });
+      if (res.ok) showNotice(`We sent a confirmation to ${escapeHtml(attendee.email)}. Open it to add ${escapeHtml(email)}.`, "success");
+      else showNotice(escapeHtml((await res.json()).error ?? "Something went wrong."), "error");
+    });
+  }
+
   async function loadMe() {
     const res = await api("/me");
     const attendee = await res.json();
@@ -489,6 +544,7 @@
     updateFlightVisibility();
     loadSubEvents();
     renderSubmit(attendee);
+    renderEmail(attendee);
     if (!loadMe.brandingLoaded) {
       loadMe.brandingLoaded = true;
       loadBranding(attendee.eventId);
@@ -505,6 +561,18 @@
     });
     if (res.ok) showNotice("Dietary preference saved.", "success");
   });
+
+  // ADR 0056 — landing here from a confirm link.
+  const confirmed = new URLSearchParams(window.location.search).get("confirmed");
+  const confirmedText = {
+    added: "Done — that address now works for signing in.",
+    claimed: "Done — event emails will now go to your work address.",
+    merged: "Done — your registrations are combined, and event emails go to your work address.",
+  }[confirmed];
+  if (confirmedText) {
+    showNotice(confirmedText, "success");
+    history.replaceState(null, "", "me.html");
+  }
 
   loadMe();
 </script>
