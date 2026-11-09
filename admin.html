@@ -1210,15 +1210,15 @@
           <div class="dup-preview" id="dup-preview-${i}"></div>
         </div>`),
       ...pending.map((p) => `
-        <div style="border-top:1px solid var(--border); padding:12px 0; display:flex; gap:12px; flex-wrap:wrap; align-items:center;">
-          <div style="flex:1; min-width:240px;"><strong>${escapeHtml(p.email)}</strong> ${{
+        <div style="border-top:1px solid var(--border); padding:12px 0; display:flex; gap:12px 24px; flex-wrap:wrap; align-items:flex-start;">
+          <div style="flex:1 1 280px; min-width:0;"><strong>${escapeHtml(p.email)}</strong> ${{
               registration: "was used to register as",
               merge: "came from a merge into",
               claim: "was added by",
             }[p.source] ?? "is waiting on"}
             <strong>${escapeHtml(p.attendee?.firstName ?? "")} ${escapeHtml(p.attendee?.lastName ?? "")}</strong>${p.source === "registration" ? " (same name and cell)" : ""}.
             It can't sign in until they confirm it from ${escapeHtml(p.attendee?.email ?? "their address")}.</div>
-          <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-start;">
+          <div style="flex:0 1 340px; display:flex; flex-direction:column; gap:6px; align-items:flex-start;">
             <span class="hint pending-sent" data-id="${escapeHtml(p.id)}">${p.confirmSentAt ? `Waiting on ${escapeHtml(p.attendee?.firstName ?? "them")} to confirm · sent ${escapeHtml(sentLabel(p.confirmSentAt))}` : "No confirmation sent yet"}</span>
             <div style="display:flex; gap:8px; flex-wrap:wrap;">
               <button class="btn ghost pending-confirm" data-id="${escapeHtml(p.id)}" data-name="${escapeHtml(p.attendee?.firstName ?? "them")}" type="button">${p.confirmSentAt ? "Send again anyway" : "Send confirmation"}</button>
