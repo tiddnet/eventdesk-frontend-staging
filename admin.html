@@ -1217,10 +1217,14 @@
               claim: "was added by",
             }[p.source] ?? "is waiting on"}
             <strong>${escapeHtml(p.attendee?.firstName ?? "")} ${escapeHtml(p.attendee?.lastName ?? "")}</strong>${p.source === "registration" ? " (same name and cell)" : ""}.
-            It can't sign in until they confirm it from ${escapeHtml(p.attendee?.email ?? "their address")}.
-            <br><span class="hint pending-sent" data-id="${escapeHtml(p.id)}">${p.confirmSentAt ? `Waiting on ${escapeHtml(p.attendee?.firstName ?? "them")} to confirm · sent ${escapeHtml(sentLabel(p.confirmSentAt))}` : "No confirmation sent yet"}</span></div>
-          <button class="btn ghost pending-confirm" data-id="${escapeHtml(p.id)}" data-name="${escapeHtml(p.attendee?.firstName ?? "them")}" type="button">${p.confirmSentAt ? "Send again anyway" : "Send confirmation"}</button>
-          <button class="btn ghost pending-remove" data-id="${escapeHtml(p.id)}" type="button">Remove</button>
+            It can't sign in until they confirm it from ${escapeHtml(p.attendee?.email ?? "their address")}.</div>
+          <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-start;">
+            <span class="hint pending-sent" data-id="${escapeHtml(p.id)}">${p.confirmSentAt ? `Waiting on ${escapeHtml(p.attendee?.firstName ?? "them")} to confirm · sent ${escapeHtml(sentLabel(p.confirmSentAt))}` : "No confirmation sent yet"}</span>
+            <div style="display:flex; gap:8px; flex-wrap:wrap;">
+              <button class="btn ghost pending-confirm" data-id="${escapeHtml(p.id)}" data-name="${escapeHtml(p.attendee?.firstName ?? "them")}" type="button">${p.confirmSentAt ? "Send again anyway" : "Send confirmation"}</button>
+              <button class="btn ghost pending-remove" data-id="${escapeHtml(p.id)}" type="button">Remove</button>
+            </div>
+          </div>
         </div>`),
     ].join("");
 
