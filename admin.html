@@ -1203,8 +1203,12 @@
         </div>`),
       ...pending.map((p) => `
         <div style="border-top:1px solid var(--border); padding:12px 0; display:flex; gap:12px; flex-wrap:wrap; align-items:center;">
-          <div style="flex:1; min-width:240px;"><strong>${escapeHtml(p.email)}</strong> was used to register as
-            <strong>${escapeHtml(p.attendee?.firstName ?? "")} ${escapeHtml(p.attendee?.lastName ?? "")}</strong> (same name and cell).
+          <div style="flex:1; min-width:240px;"><strong>${escapeHtml(p.email)}</strong> ${{
+              registration: "was used to register as",
+              merge: "came from a merge into",
+              claim: "was added by",
+            }[p.source] ?? "is waiting on"}
+            <strong>${escapeHtml(p.attendee?.firstName ?? "")} ${escapeHtml(p.attendee?.lastName ?? "")}</strong>${p.source === "registration" ? " (same name and cell)" : ""}.
             It can't sign in until they confirm it from ${escapeHtml(p.attendee?.email ?? "their address")}.</div>
           <button class="btn ghost pending-confirm" data-id="${escapeHtml(p.id)}" type="button">Send them a confirmation</button>
           <button class="btn ghost pending-remove" data-id="${escapeHtml(p.id)}" type="button">Remove</button>
